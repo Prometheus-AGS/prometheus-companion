@@ -37,3 +37,29 @@ between the region and §0.2/§0.4/§0.6 and needs a human reconciliation
 pass; see the reduction procedure in the skill's "Existing projects"
 section. Measure with /context before and after — a reduction that lowers
 tokens and lowers pass rate is a regression.
+
+## 2026-08-20 — Three audits ship as documented stubs, not fake checks
+
+`audit-tokens`, `audit-skill-desc`, and `audit-ui` exit 0 and print `SKIP` with
+the precondition they need, rather than implementing a check that cannot work.
+
+**Why.** Each lacks its subject:
+- `audit-ui` — §12 needs 8 screenshots/surface; no Playwright or BrowserClaw
+  exists, so nothing can capture them. A "does screenshots/ exist" check would
+  pass on an empty directory — green for work that never happened.
+- `audit-skill-desc` — §19 cites §7.1, which does not exist (§7 is Mobile
+  navigation). All 40 SKILL.md files are vendored by `openspec init`; linting
+  them reports on OpenSpec's style, not ours.
+- `audit-tokens` — §8/§17 require tokens from theme.css; there is no theme.css
+  and App.css carries 24 literals. Blocking would make main permanently red,
+  and a gate that always fails stops being read.
+
+`audit-all.sh` counts SKIP separately and never as PASS. Each stub's header
+documents exactly how to activate it.
+
+**Also fixed to make the gate green rather than decorative:**
+- Renamed `src/App.tsx`/`App.css` to `app.tsx`/`app.css` (§3). Symbol stays
+  `App`; only the filename is kebab-case.
+- Pinned all 10 dependencies to installed versions (§15). No version drift:
+  each pin is the version already resolved in the lockfile. Verified
+  `pnpm install --frozen-lockfile` succeeds.

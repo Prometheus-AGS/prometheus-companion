@@ -40,3 +40,23 @@ layer rule in particular cannot be reduced to one.
 Tauri scaffold default. Should be `src/app.tsx`. Recorded as a warning rather
 than a blocking constraint, because a gate that fails on a clean checkout is
 broken, not strict. Promote to blocking after the rename.
+
+## `pnpm audit` is a built-in — it shadows the script
+
+pnpm ships its own `audit` command (npm-registry vulnerability scan). Defining a
+`scripts.audit` key does NOT override it: `pnpm audit` runs the built-in and
+exits 0 with "No known vulnerabilities found", never touching AGENTS.md §19's
+gate. It looks like the gate passed.
+
+Use `pnpm run audit` or the `pnpm run audit:all` alias. `.git/hooks/pre-push`
+calls `bash scripts/audit-all.sh` directly so it cannot be shadowed.
+
+§19 of AGENTS.md documents the bare `pnpm audit` form and is misleading as
+written.
+
+## Renaming files on macOS hides case-only import breakage
+
+`git mv src/App.tsx src/app.tsx` left `import App from "./App"` resolving fine
+locally — APFS is case-insensitive by default. The same tree fails on a
+case-sensitive filesystem (Linux CI, most containers). After any case-only
+rename, grep for stale references explicitly; a green local build proves nothing.

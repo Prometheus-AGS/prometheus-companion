@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "scope": "project",
+  "generation": "22ca0abb2a719f7218724e68a830ed8778d6fa33c393f4906107fb21873c3643",
+  "candidateCount": 8,
+  "byteCount": 24625,
+  "entries": [
+    {
+      "id": "executor-session-completed-in-spec-phase-without-change-id",
+      "title": "Executor Session Completed in Spec Phase Without Change ID",
+      "content": "## Event\n\n- Executor session completed.\n- Reported phase: `spec`.\n- Reported change: `unknown`.\n\n## Interpretation\n\n- No explicit OpenSpec change identifier was recorded for this executor run.\n- No implementation, evidence, certification, or publication details were provided in the raw event.\n- For surrounding project bootstrap/status context, see [Karpathy session d98cf9a10dae](/karpathy-session-d98cf9a10daee4b9.md).\n\n# Citations\n\n1. [1] stdin",
+      "tags": [
+        "executor-session",
+        "spec-phase",
+        "openspec",
+        "kbd-orchestrator"
+      ],
+      "links": [
+        "karpathy-session-d98cf9a10daee4b9"
+      ],
+      "sources": [
+        "stdin"
+      ],
+      "created_at": "2026-08-20T08:27:40.999054Z",
+      "updated_at": "2026-08-20T08:27:40.999054Z",
+      "revision": 0,
+      "entry_type": "Reference",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-077e404ce64fc08b",
+      "title": "Karpathy session 077e404ce64f",
+      "content": "## Delta\n\nYour `AGENTS.md` was left untouched (same 21874 bytes, no OpenSpec markers injected) — the `.agents/skills/` directory is what serves the generic-agent surface.\n\nDone. OpenSpec 1.10.0 initialized in `/Users/gqadonis/Projects/prometheus/prometheus-companion` for all four tools.\n\n**What was created:**\n\n| Target | Path | Contents |\n|---|---|---|\n| Claude Code | `.claude/` | 10 skills + 10 `/opsx:*` commands |\n| Codex | `.agents/skills/` | 10 skills (Codex uses skills, no commands) |\n| Kimi Code | `.kimi-code/skills/` | 10 skills (no command adapter exists) |\n| OpenCode | `.opencode/` | 10 skills + 10 `/opsx-*` commands |\n| Core | `openspec/config.yaml` | schema `spec-driven`, all optional sections commented |\n\n**Invocation per tool:**\n- Claude Code — `/opsx:new \"your idea\"`\n- Codex — `$openspec-new-change \"your idea\"`\n- Kimi Code — `/skill:openspec-new-change \"your idea\"`\n- OpenCode — `/opsx-new \"your idea\"`\n\n**Two notes:**\n\n1. Init cleaned up 10 legacy global files in `~/.codex/prompts/opsx-*.md` — these were the old prompt-based Codex integration, replaced by the skills mechanism. That's outside this repo, in your home directory, and affects Codex globally. It happened as part of the standard init flow; flagging it since it wasn't scoped to this project.\n\n2. Your existing `AGENTS.md` (the project constitution CLAUDE.md inherits from) was not modified — verified by byte size and by grepping for OpenSpec markers. If you want OpenSpec's workflow rules referenced from it, that's a separate deliberate edit; note `CLAUDE.md` says it's generated from `templates/rules/claude.md.tmpl` and CI fails on hand-edits, so the same likely applies to `AGENTS.md`.\n\n`openspec/` currently holds only `config.yaml` — no specs or changes yet, which is expected for a fresh init. Consider filling in the `context:` block in `openspec/config.yaml` with the Companion's stack (Tauri + React + Vite, pnpm, 4-layer CLEAN architecture, kebab-case) so generated artifacts match your conventions rather than restating them per change.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:11:46.039328Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:11:47.033893Z",
+      "updated_at": "2026-08-20T08:11:47.033893Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-4bdf05929c37ebcc",
+      "title": "Karpathy session 4bdf05929c37",
+      "content": "## Delta\n\nBootstrap applied. `mixed` profile, all assets installed, both audit gates reconciled.\n\n**The one substantive deviation from the default plan:** the managed region went into `templates/rules/*.md.tmpl`, not into `AGENTS.md`/`CLAUDE.md`. Your `gen-rule-files.sh` renders by whole-file copy and `audit-generated.sh` invokes it, so the default SPLICE would have been erased by the next `pnpm audit` — silently, no error. Verified the fix: two consecutive renders, one well-formed marker pair, outputs byte-identical to templates, idempotent, `audit-generated: PASS`.\n\n**Installed:**\n\n| | |\n|---|---|\n| Hooks | `tier-guard.sh`, `single-writer.sh`, `sycophancy-gate.sh`, `reanchor.sh` — all executable, tier-guard wired |\n| Rules | `.claude/rules/typescript.md` (path-scoped, loads on file read) |\n| Agent | `.claude/agents/artifact-critic.md` |\n| Settings | `.claude/settings.json` — clean CREATE, no merge risk; global settings untouched |\n| Memory | `.prometheus/{session-log,decisions,gotchas}.md`, `postmortems/`, `model-fleet.md` |\n| Position | `.kbd-orchestrator/current-waypoint.json` (phase=spec) |\n| Pins | `versions.toml` stub |\n\n`verify.sh`: **PASS 10, FAIL 2, WARN 2**.\n\n**The 2 FAILs are word-count ceilings, and the number is misleading.** `verify.sh` counts all 4271 words of `AGENTS.md` as managed. The bootstrap-owned region is **1388 words — under the 1500 ceiling**. The overage is your pre-existing §0–§20 prose (2883 words), which the skill deliberately refuses to shrink.\n\nBut there's a real finding under the bad metric: you now have **two constitutions in resident context**. The region's \"Evidentiary standard\" restates your §0.2, \"Evidence over assertion\" restates §0.6, \"Scope\" restates §0.4 — same substance, different wording. That's precisely the adherence-degrading overlap the skill's own migration path exits 2 to avoid. It needs a human reconciliation pass, and per the skill's procedure: `/context` before and after, then re-run a fixed task set and compare **pass rate**, not feel. A reduction that lowers tokens and lowers pass rate is a regression. Recorded as open in `.prometheus/decisions.md`.\n\n**The 2 WARNs you can't fix here.** Skill budget is **43.1x over** machine-wide (2436 skills, ~172k tokens vs ~4000 budget) — your repo contributes 1510 chars of that. Raising `skillListingBudgetFraction` won't touch a multiple that size; gating plugins is the lever. Also 9 skills have empty descriptions and can't auto-trigger.\n\nTwo things to know going forward:\n\n1. **Don't edit the region in `AGENTS.md`** — it's generated. Edit the template region, or re-run `bootstrap.sh` and re-apply the relocation. A plain bootstrap re-run will splice into the outputs again and get wiped.\n2. Bootstrap put `@AGENTS.md` on line 1 of `CLAUDE.md`, above the GENERATED banner. `audit-generated.sh` uses `head -3`, so the banner is still caught at line 3 — it passes, but the margin is one line. Worth knowing if that check ever tightens.\n\nNext per the skill: `/kbd-init` for `project.json` + `constraints.md`, then `/doctor` to confirm no skill descriptions dropped.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:19:03.170940Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:19:11.603986Z",
+      "updated_at": "2026-08-20T08:19:11.603986Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-9d60e2439a301d72",
+      "title": "Karpathy session 9d60e2439a30",
+      "content": "## Delta\n\nDone. Repo initialized on `main`, one commit, clean working tree.\n\n```\n19e2f08  chore: initialize repo with OpenSpec, context bootstrap, and KBD orchestrator\n         130 files changed, 22017 insertions(+)\n```\n\n**Checks I ran before committing**, since this is the permanent record:\n\n- **Secret scan** across all staged text files — no `sk-*`, `ghp_*`, `AKIA*`, private keys, or Slack tokens. No `.env`, `.pem`, `.key`, or credentials files staged.\n- **No parent repo** — confirmed this wouldn't become a nested checkout.\n- **Local gates**, per `AGENTS.md` §1: `audit-generated: PASS`, `kbd-init-validate: PASS`, `pnpm run build` exit 0.\n\nPer your call, the `.prometheus/knowledge/wiki/` session transcripts are committed. Expect them to churn on future commits — a hook rewrites them each session.\n\n**Two things resolved by having git:**\n\n- `no-committed-env` in `constraints.md` uses `git ls-files`; it was a no-op before and now actually checks something.\n- `worktree:` in `/kbd-status` resolves. It reports `⚠ outside worktreeRoot` — that's correct and expected: this is your primary checkout, not a child-phase worktree under `~/.claude/worktrees`.\n\n**One thing to flag:** the commit is authored `Travis James <travis@tribehealthsolutions.com>`, from your global git config. Your Claude Code account is `tjames@prometheusags.ai`. If this project should carry the Prometheus identity, set it before more commits accumulate:\n\n```bash\ngit config user.email tjames@prometheusags.ai\n```\n\nI didn't change it — repo-local identity is your call, and the existing config may well be deliberate.\n\nNo remote is configured, so nothing has been pushed. Say the word if you want one added.\n\n`/kbd-status` will now render a proper worktree line. The nine missing `audit:*` scripts from §19 remain the strongest candidate for a first phase — that's seven prose rules currently claiming enforcement that doesn't exist.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:25:03.327746Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:27:29.080926Z",
+      "updated_at": "2026-08-20T08:27:29.080926Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-a913bee1caf2174f",
+      "title": "Karpathy session a913bee1caf2",
+      "content": "## Delta\n\nBootstrap applied. `mixed` profile, all assets installed, both audit gates reconciled.\n\n**The one substantive deviation from the default plan:** the managed region went into `templates/rules/*.md.tmpl`, not into `AGENTS.md`/`CLAUDE.md`. Your `gen-rule-files.sh` renders by whole-file copy and `audit-generated.sh` invokes it, so the default SPLICE would have been erased by the next `pnpm audit` — silently, no error. Verified the fix: two consecutive renders, one well-formed marker pair, outputs byte-identical to templates, idempotent, `audit-generated: PASS`.\n\n**Installed:**\n\n| | |\n|---|---|\n| Hooks | `tier-guard.sh`, `single-writer.sh`, `sycophancy-gate.sh`, `reanchor.sh` — all executable, tier-guard wired |\n| Rules | `.claude/rules/typescript.md` (path-scoped, loads on file read) |\n| Agent | `.claude/agents/artifact-critic.md` |\n| Settings | `.claude/settings.json` — clean CREATE, no merge risk; global settings untouched |\n| Memory | `.prometheus/{session-log,decisions,gotchas}.md`, `postmortems/`, `model-fleet.md` |\n| Position | `.kbd-orchestrator/current-waypoint.json` (phase=spec) |\n| Pins | `versions.toml` stub |\n\n`verify.sh`: **PASS 10, FAIL 2, WARN 2**.\n\n**The 2 FAILs are word-count ceilings, and the number is misleading.** `verify.sh` counts all 4271 words of `AGENTS.md` as managed. The bootstrap-owned region is **1388 words — under the 1500 ceiling**. The overage is your pre-existing §0–§20 prose (2883 words), which the skill deliberately refuses to shrink.\n\nBut there's a real finding under the bad metric: you now have **two constitutions in resident context**. The region's \"Evidentiary standard\" restates your §0.2, \"Evidence over assertion\" restates §0.6, \"Scope\" restates §0.4 — same substance, different wording. That's precisely the adherence-degrading overlap the skill's own migration path exits 2 to avoid. It needs a human reconciliation pass, and per the skill's procedure: `/context` before and after, then re-run a fixed task set and compare **pass rate**, not feel. A reduction that lowers tokens and lowers pass rate is a regression. Recorded as open in `.prometheus/decisions.md`.\n\n**The 2 WARNs you can't fix here.** Skill budget is **43.1x over** machine-wide (2436 skills, ~172k tokens vs ~4000 budget) — your repo contributes 1510 chars of that. Raising `skillListingBudgetFraction` won't touch a multiple that size; gating plugins is the lever. Also 9 skills have empty descriptions and can't auto-trigger.\n\nTwo things to know going forward:\n\n1. **Don't edit the region in `AGENTS.md`** — it's generated. Edit the template region, or re-run `bootstrap.sh` and re-apply the relocation. A plain bootstrap re-run will splice into the outputs again and get wiped.\n2. Bootstrap put `@AGENTS.md` on line 1 of `CLAUDE.md`, above the GENERATED banner. `audit-generated.sh` uses `head -3`, so the banner is still caught at line 3 — it passes, but the margin is one line. Worth knowing if that check ever tightens.\n\nNext per the skill: `/kbd-init` for `project.json` + `constraints.md`, then `/doctor` to confirm no skill descriptions dropped.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:19:00.241749Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:19:00.909450Z",
+      "updated_at": "2026-08-20T08:19:00.909450Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-c8e731a705f4f4c9",
+      "title": "Karpathy session c8e731a705f4",
+      "content": "## Delta\n\nDone. Repo initialized on `main`, one commit, clean working tree.\n\n```\n19e2f08  chore: initialize repo with OpenSpec, context bootstrap, and KBD orchestrator\n         130 files changed, 22017 insertions(+)\n```\n\n**Checks I ran before committing**, since this is the permanent record:\n\n- **Secret scan** across all staged text files — no `sk-*`, `ghp_*`, `AKIA*`, private keys, or Slack tokens. No `.env`, `.pem`, `.key`, or credentials files staged.\n- **No parent repo** — confirmed this wouldn't become a nested checkout.\n- **Local gates**, per `AGENTS.md` §1: `audit-generated: PASS`, `kbd-init-validate: PASS`, `pnpm run build` exit 0.\n\nPer your call, the `.prometheus/knowledge/wiki/` session transcripts are committed. Expect them to churn on future commits — a hook rewrites them each session.\n\n**Two things resolved by having git:**\n\n- `no-committed-env` in `constraints.md` uses `git ls-files`; it was a no-op before and now actually checks something.\n- `worktree:` in `/kbd-status` resolves. It reports `⚠ outside worktreeRoot` — that's correct and expected: this is your primary checkout, not a child-phase worktree under `~/.claude/worktrees`.\n\n**One thing to flag:** the commit is authored `Travis James <travis@tribehealthsolutions.com>`, from your global git config. Your Claude Code account is `tjames@prometheusags.ai`. If this project should carry the Prometheus identity, set it before more commits accumulate:\n\n```bash\ngit config user.email tjames@prometheusags.ai\n```\n\nI didn't change it — repo-local identity is your call, and the existing config may well be deliberate.\n\nNo remote is configured, so nothing has been pushed. Say the word if you want one added.\n\n`/kbd-status` will now render a proper worktree line. The nine missing `audit:*` scripts from §19 remain the strongest candidate for a first phase — that's seven prose rules currently claiming enforcement that doesn't exist.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:27:28.678951Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- .prometheus/knowledge/wiki/index.md\n- .prometheus/knowledge/wiki/log.md\n- .prometheus/knowledge/wiki/karpathy-session-9d60e2439a301d72.md\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:27:29.339059Z",
+      "updated_at": "2026-08-20T08:27:29.339059Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-d98cf9a10daee4b9",
+      "title": "Karpathy session d98cf9a10dae",
+      "content": "## Delta\n\n```\nKBD STATUS — Prometheus Companion\nphase: spec\nworktree: (none — not inside a git checkout)\nLast updated by: kbd-init (2026-08-20)\n\nImplementation: NOT_STARTED (no phase defined)\nEvidence:       NOT_TRACKED\nCertification:  NOT_TRACKED\nPublication:    NOT_TRACKED\n\nGoals:\n  (none — active_phase is null; no goals defined yet)\n\nChanges:\n  (none — openspec/changes/ is empty, no archive)\n\nNext action (from waypoint): /kbd-new-phase <name>\n```\n\nCompleted kbd-status — spec\n\n**Reading the state:** this is a correctly-initialized project with zero work started. `active_phase` is `null`, there's no `.kbd-orchestrator/phases/` directory, and `openspec/changes/` is empty. The waypoint's `phase: spec` is the bootstrap stub's default position marker, not a phase you've defined — `/kbd-new-phase` is what creates real phase state.\n\nI rendered from the waypoint because `position.json` is absent, which is the documented fallback. No nested-phase fields (`parentPhase`, `childPhases`, `childPointer`) are present, so it's a flat phase line with no `children:` row. Dense output, per `ux_profile: advanced`.\n\n**One thing worth your attention: this directory is not a git repository.** `git rev-parse --show-toplevel` fails. That has real consequences beyond the `worktree:` line:\n\n- `worktreeRoot` in `project.json` and `maxChildDepth: 4` describe a worktree-based child-phase model that can't function without git.\n- The `constraints.md` check `no-committed-env` uses `git ls-files` — it will never fire.\n- Your `AGENTS.md` §14 release process and §15's \"commit explaining the bump\" both assume version control.\n- Nothing done so far — OpenSpec init, bootstrap, kbd-init — is recoverable if the directory is lost.\n\nThat last point is the one I'd act on. There's now a meaningful amount of configuration here that took several careful steps to get right, including two bug fixes that a `bootstrap.sh` re-run would silently undo.\n\n**Before `/kbd-new-phase`, two candidates:**\n\n1. `git init` + an initial commit, so the config is recoverable and the worktree/child-phase machinery works.\n2. The nine missing `audit:*` scripts from `AGENTS.md` §19 — a well-scoped first phase that converts seven prose rules into real enforcement.\n\nWant me to do either?\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:25:01.334252Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:25:01.890826Z",
+      "updated_at": "2026-08-20T08:25:01.890826Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    },
+    {
+      "id": "karpathy-session-e2f9ae4f016ec55e",
+      "title": "Karpathy session e2f9ae4f016e",
+      "content": "## Delta\n\nCompleted kbd-init — Prometheus Companion\n\nBoth files written and validated: `[kbd-init] configuration valid; execution prerequisites ready` (exit 0).\n\n**Discovery results:**\n\n| Field | Value | Basis |\n|---|---|---|\n| Name | Prometheus Companion | `AGENTS.md` H1 |\n| Stack | Vite/React + Tauri (pnpm) | `vite.config.ts`, `src-tauri/Cargo.toml` |\n| Build | `pnpm run build` | **verified passing** — exit 0, 19 modules, 396ms |\n| Test | `null` | no test script, no vitest/jest/playwright config |\n| Lint | `null` | no lint script, no eslint config |\n| Specs | `openspec/specs/*.md` + architecture doc | OpenSpec init from earlier |\n| Workspace | single-project | read `../recursive-llm.code-workspace` — does not list this project |\n\nI left `test_command` and `lint_command` as `null` rather than inventing plausible commands. Given `AGENTS.md` §1 mandates local-only validation and §0.6 distinguishes verified from self-reported, a command that doesn't exist would let a future phase claim tests passed when nothing ran.\n\n**I fixed a live bug while doing this.** The waypoint `bootstrap.sh` wrote had only `.phase`, and a note instructing you to set `.phase` for Tier 3. But `tier-guard.sh:39` reads `.status` — which didn't exist in the file. So `jq` returned empty and Tier 3 was blocked **unconditionally, with no reachable unblock path**. That's precisely the dead-gate failure the hook's own header comment says a previous version had. Added `\"status\": \"running\"`, corrected the note, and verified both directions: `cargo build --release` blocks (exit 2, with a useful message); `PROMETHEUS_TIER3=1` opens it (exit 0). Recorded in `gotchas.md` — **a `bootstrap.sh` re-run will reintroduce it.**\n\n**The larger finding, which affects what you can trust:** `AGENTS.md` §19 advertises a ten-script `pnpm audit` umbrella with a pre-push hook enforcing it. Nine of the ten scripts don't exist, and `package.json` has no `audit` key — so `pnpm audit` doesn't resolve to anything. Sections §3, §4, §5, §11, §12, §13, and §15 each name one of the missing scripts as their enforcement. Those rules are currently prose that reads like it's mechanically checked.\n\nI put inline `check:` greps in `constraints.md` as substitutes and validated every blocking one returns zero hits on the current tree — a gate that fails on a clean checkout is broken, not strict. But greps are heuristics; §4's layer rule can't be reduced to one, so it's a warning with a note rather than a fake blocking check.\n\nTwo things landed as warnings rather than blocks: `src/App.tsx` violates your own §3 kebab-case rule (Tauri scaffold default, should be `app.tsx`), and the 4-layer CLEAN structure §4 describes doesn't exist yet — `src/` has no `domain/`, `application/`, `infrastructure/`, or `presentation/` directories.\n\n`verify.sh` is unchanged at PASS 10 / FAIL 2 / WARN 2 — same word-count ceilings and machine-wide skill budget as before, none affected by this step.\n\nNext per the skill: `/kbd-status` to confirm, then `/kbd-new-phase <name>`. If you want the audit scripts to actually exist, that's a good candidate for the first phase.\n\n## Root Cause\n\nNo explicit root-cause section was captured; preserve this as a session record, not an inferred diagnosis.\n\n## Corrective Actions\n\nReview and promote only reusable findings.\n\n## Session Metadata\n\n- Harness: claude-code\n- Session: 7993178a-b855-4487-9a9a-0143daef704e\n- Captured: 2026-08-20T08:22:29.038454Z\n- Project: /Users/gqadonis/Projects/prometheus/prometheus-companion\n\n## Changed Paths\n\n- No changed paths detected.\n",
+      "tags": [
+        "karpathy",
+        "session-learning"
+      ],
+      "links": [],
+      "sources": [
+        "session:7993178a-b855-4487-9a9a-0143daef704e"
+      ],
+      "created_at": "2026-08-20T08:22:29.723385Z",
+      "updated_at": "2026-08-20T08:22:29.723385Z",
+      "revision": 0,
+      "entry_type": "SessionRecord",
+      "description": null,
+      "extra": {}
+    }
+  ]
+}
