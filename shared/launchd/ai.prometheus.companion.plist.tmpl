@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Companion's own launchd LaunchAgent, so launchd restarts the Companion
+  when it dies (change-cpc-007's third requirement: "Companion is restarted
+  by launchd... without crash-loop removal").
+
+  Rendered by scripts/install-companion-service.sh — do not edit in place;
+  edit this template and re-render, or the installed plist drifts from source.
+
+  Rules below follow HMA's launchagent-supervisor spec
+  (hybrid-mobile-architecture-src/docs/07-launchagent-supervisor-spec.md §2),
+  the same 9 fixes the pack's own services.manifest.json is generated against:
+
+  - R1.1 ThrottleInterval: the pack's spec table gives 15 as the floor
+    above launchd's "> 5 restarts in 10s is inefficient" threshold; this
+    template renders 15 explicitly rather than the render script's looser
+    10s floor, per change-cpc-007's stated acceptance criterion of >= 15.
+  - R1.2 KeepAlive dictionary form: SuccessfulExit=false, Crashed=true — a
+    deliberate `launchctl bootout` (planned) does not restart; a crash does.
+    Bare `<true/>` would restart both, defeating an intentional stop.
+  - R1.3 ProcessType=Interactive: keeps launchd from classifying a
+    control-plane process as background-eligible for termination.
+  - R1.4 explicit StandardOutPath/StandardErrorPath: a crash with no log
+    path leaves no evidence.
+  - R1.5 RunAtLoad=true: the Companion starts on login without a manual
+    `launchctl kickstart`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.prometheus.companion</string>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__COMPANION_BIN__</string>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/companion.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/companion.stderr.log</string>
+
+  <key>WorkingDirectory</key>
+  <string>__WORKING_DIRECTORY__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:__HOME__/.local/bin:/usr/bin:/bin</string>
+    <key>PROMETHEUS_PACK_ROOT</key>
+    <string>__PROMETHEUS_PACK_ROOT__</string>
+__OPTIONAL_ENVIRONMENT__
+  </dict>
+
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>65536</integer>
+  </dict>
+</dict>
+</plist>

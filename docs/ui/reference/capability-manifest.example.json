@@ -1,0 +1,177 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "id": "skill-pack",
+    "label": "prometheus-skill-pack",
+    "path": "~/Projects/prometheus/prometheus-skill-pack",
+    "glossaryVersion": 4
+  },
+  "capabilities": [
+    {
+      "id": "logs.read",
+      "summary": "Read a service log tail, optionally filtered by level or time window",
+      "effectClass": "read",
+      "gate": "none",
+      "callers": ["ui", "chat", "a2a", "mobile"],
+      "params": {
+        "type": "object",
+        "required": ["serviceId"],
+        "properties": {
+          "serviceId": { "type": "string", "resolver": "service" },
+          "level": { "enum": ["error", "warn", "info", "debug"] },
+          "lines": { "type": "integer", "default": 200 }
+        }
+      },
+      "triggers": ["logs", "show me the log", "tail", "what is it saying", "last lines", "stderr"],
+      "examples": [
+        { "prompt": "show me surreal-memory errors", "params": { "serviceId": "ai.prometheus.surreal-memory-native", "level": "error" } }
+      ],
+      "blastRadius": "read-only",
+      "reversible": true
+    },
+    {
+      "id": "service.restart",
+      "summary": "Restart a supervised service and wait for readiness",
+      "effectClass": "mutating",
+      "gate": "confirm",
+      "callers": ["ui", "chat", "mobile"],
+      "params": {
+        "type": "object",
+        "required": ["serviceId"],
+        "properties": {
+          "serviceId": { "type": "string", "resolver": "service" },
+          "waitForReady": { "type": "boolean", "default": true }
+        }
+      },
+      "triggers": ["restart", "bounce", "kick", "reload the service", "bring it back", "kickstart"],
+      "negativeTriggers": ["restart my mac", "reboot", "restart the computer", "log out"],
+      "examples": [
+        { "prompt": "bounce surreal-memory", "params": { "serviceId": "ai.prometheus.surreal-memory-native" } },
+        { "prompt": "restart the thing on 23001", "params": { "serviceId": "ai.prometheus.surreal-memory-native" } }
+      ],
+      "blastRadius": "single-unit",
+      "reversible": true
+    },
+    {
+      "id": "service.disable",
+      "summary": "Disable a supervised service so the supervisor stops restarting it",
+      "effectClass": "mutating",
+      "gate": "confirm + reason",
+      "callers": ["ui"],
+      "params": {
+        "type": "object",
+        "required": ["serviceId", "reason"],
+        "properties": {
+          "serviceId": { "type": "string", "resolver": "service" },
+          "reason": { "type": "string", "minLength": 8 }
+        }
+      },
+      "triggers": ["disable", "stop restarting", "turn it off", "unload"],
+      "negativeTriggers": ["disable notifications", "mute"],
+      "blastRadius": "single-unit",
+      "reversible": true,
+      "personas": ["operator"]
+    },
+    {
+      "id": "config.write",
+      "summary": "Write a configuration value to a manifest-declared config path",
+      "effectClass": "mutating",
+      "gate": "confirm + diff",
+      "callers": ["ui", "chat"],
+      "params": {
+        "type": "object",
+        "required": ["serviceId", "key", "value"],
+        "properties": {
+          "serviceId": { "type": "string", "resolver": "service" },
+          "key": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      },
+      "triggers": ["change the config", "set", "point it at", "edit the plist", "update the setting"],
+      "examples": [
+        {
+          "prompt": "point surreal-memory at the mcp database",
+          "params": { "serviceId": "ai.prometheus.surreal-memory-native", "key": "SURREAL_DATABASE", "value": "mcp" }
+        }
+      ],
+      "blastRadius": "single-unit",
+      "reversible": true
+    },
+    {
+      "id": "skills.reindex",
+      "summary": "Rebuild the semantic skill index for one or all registered sources",
+      "effectClass": "mutating",
+      "gate": "none",
+      "callers": ["ui", "chat", "a2a"],
+      "params": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "sourceId": { "type": "string", "resolver": "source" }
+        }
+      },
+      "triggers": ["reindex", "rebuild the index", "re-scan skills", "refresh skills"],
+      "examples": [{ "prompt": "reindex the skill pack", "params": { "sourceId": "skill-pack" } }],
+      "blastRadius": "multi-unit",
+      "reversible": true
+    },
+    {
+      "id": "review.adversarial",
+      "summary": "Run a producer, critic, and judge review over a diff or a plan",
+      "effectClass": "mutating",
+      "gate": "none",
+      "callers": ["ui", "chat", "a2a"],
+      "params": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "target": { "type": "string" },
+          "rounds": { "type": "integer", "default": 2, "maximum": 2 }
+        }
+      },
+      "triggers": ["review", "critique", "check this plan", "adversarial review", "second opinion"],
+      "blastRadius": "read-only",
+      "reversible": true
+    },
+    {
+      "id": "pairing.approve",
+      "summary": "Approve a pending device pairing request and grant it a capability subset",
+      "effectClass": "privileged",
+      "gate": "confirm + biometric",
+      "callers": ["ui"],
+      "params": {
+        "type": "object",
+        "required": ["requestId", "grants"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "grants": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "triggers": ["pair", "approve the device", "add my phone"],
+      "negativeTriggers": ["pair bluetooth"],
+      "blastRadius": "fleet",
+      "reversible": true,
+      "personas": ["operator"]
+    },
+    {
+      "id": "a2a.delegate",
+      "summary": "Delegate a task to a paired peer agent through the A2A gateway",
+      "effectClass": "privileged",
+      "gate": "confirm per peer",
+      "callers": ["a2a"],
+      "params": {
+        "type": "object",
+        "required": ["peerNodeId", "capability", "params"],
+        "properties": {
+          "peerNodeId": { "type": "string", "resolver": "peer" },
+          "capability": { "type": "string" },
+          "params": { "type": "object" }
+        }
+      },
+      "triggers": ["delegate", "ask the other machine", "run it on"],
+      "blastRadius": "fleet",
+      "reversible": false,
+      "personas": ["operator"]
+    }
+  ]
+}

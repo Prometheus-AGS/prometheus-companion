@@ -1,3 +1,12 @@
+> Current source status (2026-10-05): this document is retained design history,
+> not a shipped capability list or permission to run its older build/test workflow.
+> Current operational source and pending release gates are described in
+> [the repository README](../README.md), [installation](installation.md),
+> [control APIs](control-api.md) and [maintenance](maintenance.md). The main
+> window remains the starter UI; service-health tray and headless/control/P2P
+> wiring exist in source, pending local integration. UI/mobile roadmap remains
+> separate work. Canonical implementation-first/local integration policy governs.
+
 # Prometheus Companion — Architecture, Functional Specification, and Implementation Plan
 
 > **Repo:** `/Users/gqadonis/Projects/prometheus/prometheus-companion/`
@@ -34,7 +43,7 @@
 16. [Service supervisor — what the Companion knows about its substrate](#16--service-supervisor--what-the-companion-knows-about-its-substrate)
 17. [Provider, model, and credential management](#17--provider-model-and-credential-management)
 18. [Storage and sync — local-first, server-authoritative](#18--storage-and-sync--local-first-server-authoritative)
-19. [Mobile parity (Pillar 6 — Tauri 2.0 mobile targets)](#19--mobile-parity-pillar-6--tauri-20-mobile-targets)
+19. [Mobile parity (Pillar 6 — Flutter + Rust over FFI)](#19--mobile-parity-pillar-6--flutter--rust-over-ffi)
 20. [Accessibility (WCAG 2.2 AA — non-negotiable)](#20--accessibility-wcag-22-aa--non-negotiable)
 21. [Build, sign, and release](#21--build-sign-and-release)
 22. [Test plan — tauri-ui-review + a11y-gate + BDD](#22--test-plan--tauri-ui-review--a11y-gate--bdd)
@@ -63,7 +72,7 @@ resident desktop application** that:
   color-coded tray icon
 - Exposes a real React 19 + Vite 8 + Tauri 2.0 dashboard for
   per-service state, log tails, queue depth, and one-click "fix it"
-- Pairs the device (P2P identity, Noise + Iroh QUIC) and authorizes
+- Pairs the device (P2P identity, Ed25519 over Iroh QUIC/TLS 1.3) and authorizes
   other devices to use this node as an execution host
 - Renders an **A2UI surface** so any of the orchestrator skills
   (`kbd-coach`, `kbd-goal-evaluator`, `pmpo-evolver`, etc.) can paint
@@ -72,9 +81,10 @@ resident desktop application** that:
   Assistant-UI thread view
 - Manages providers, models, and credentials through Liter-LLM's
   registry without leaking key values
-- Targets macOS, Windows, and Linux today; iOS and Android are
-  scheduled for the same Rust codebase via Tauri 2.0 mobile targets
-  (Pillar 6 of the review)
+- Targets macOS, Windows, and Linux today; iOS and Android ship
+  as a **separate Flutter shell** that talks to the **same Rust
+  substrate crates** over FFI via `flutter_rust_bridge`
+  (Pillar 6 of the review — see §19)
 
 **Architectural commitments** (each gets a deep section below):
 
@@ -118,7 +128,7 @@ quote the relevant portion; subsequent uses just name the file.
 | **AG-UI** | The CopilotKit-style SSE event protocol |
 | **MCP** | Model Context Protocol — the substrate's tool surface |
 | **Cedar** | The policy engine used for authorization |
-| **Noise** | The cryptographic handshake protocol used by sovereign-sync |
+| ~~**Noise**~~ | *Not used.* Removed by `change-cpc-006`: sovereign-sync authenticates peers by Ed25519 EndpointId over iroh QUIC/TLS 1.3, never a Noise handshake |
 
 Read this document alongside:
 
@@ -177,7 +187,8 @@ HMA repo or the PMP repo. The full map is in §24.
 |---|---|
 | `tanstack/react-query` | Forbidden by `pem-local-first` — it is a request cache over a data layer that already knows freshness |
 | `radix-ui` (the npm package) | The new shadcn default is Base UI; we use Base UI for everything |
-| `capacitor` (for mobile) | Tauri 2.0 mobile is GA; one codebase |
+| `capacitor` (for mobile) | Mobile is Flutter + Rust over FFI, not Capacitor. Capacitor adds a web layer and latency for no architectural benefit. |
+| `tauri 2.0 mobile` (for mobile) | Mobile is Flutter + Rust over FFI, not Tauri 2.0 mobile. Tauri is the **desktop** shell (Pillar 5). |
 | `libp2p` directly | Sovereign-sync already uses Iroh; the Companion consumes sovereign-sync |
 | `surreal` as a sidecar binary | Replaced by the in-process substrate (see §4) |
 
@@ -217,7 +228,7 @@ HMA repo or the PMP repo. The full map is in §24.
 │  │   │  - prometheus-knowledge (Karpathy KB)                      │ │  │
 │  │   │  - forge-rs (enrichment)                                   │ │  │
 │  │   │  - liter-llm (model router)                                │ │  │
-│  │   │  - sovereign-sync (Noise + Iroh)                           │ │  │
+│  │   │  - sovereign-sync (Ed25519 + Iroh QUIC)                    │ │  │
 │  │   │  - surface-bridge (A2UI projector)                         │ │  │
 │  │   │  - prometheus-research (this server's server)              │ │  │
 │  │   │  - skill-index (semantic router)                           │ │  │
@@ -250,9 +261,14 @@ configuration; the in-process path is the default and recommended.
 ## 4 · Process model and binary topology
 
 The 1.7.0 install of the pack ships **15+** long-running processes
-(see architecture review §3.1). The Companion collapses that to a
-manageable set by running the substrate **in-process** as a Rust
-library and exposing typed Tauri commands to the frontend.
+(see architecture review §3.1). **Amended by D-02 / `change-cpc-007`:** the
+Companion does not collapse those processes into itself. The pack's services
+keep running exactly where the pack installed them (D-02: the pack is open
+source and fully functional with no Companion present); this app's own
+substrate crate runs in-process and exposes typed Tauri commands to the
+frontend, and it **adopts** the pack's services — probing and restarting them
+through the platform supervisor — rather than linking them in. §16.4 has the
+full picture of what runs where.
 
 ### 4.1 The 4-process runtime
 
@@ -263,7 +279,31 @@ library and exposing typed Tauri commands to the frontend.
 | **surreal** (sidecar, optional) | SurrealDB 3.2.0 native binary | Tauri `externalBin`, supervised by prometheus-companion | quit Companion (graceful) |
 | **openai-proxy** (external, not ours) | The third-party proxy at :8181 | user's own setup (out of scope) | user |
 
-The 4 stdio MCPs (`sycophancy-correction`, `liter-llm`,
+**Amended by `change-cpc-005`.** The Companion hosts the control-plane node
+**in-process**: `prometheus_substrate::node::spawn` is called from the Tauri
+`setup` hook and binds a Unix socket. There is no extra process. A second
+entry point, `prometheus-companion-headless`, runs the *same* node with no
+window and no Stronghold vault — that binary is what the two-process
+integration harness launches and what a server-side deployment runs.
+
+**Socket allocation** (previously unspecified — the spec named only surreal
+`:28000` and openai-proxy `:8181`). The node binds
+`<data_local_dir>/prometheus/run/sovereign-sync.sock`, overridable with
+`SOVEREIGN_SYNC_SOCKET`. That is seam 1 of the pack's integration contract, and
+the path is what every installed `prometheus` CLI already discovers. The name
+`sovereign-sync.sock` is kept in contract v1 for CLI compatibility; it is not a
+claim about which binary is listening. No TCP port is allocated: `--tcp` remains
+available on the daemon for hosts without Unix sockets, gated behind a
+mode-0600 bearer token.
+
+Startup order is load-bearing and is the daemon's own: bind the socket and
+answer `/health` **first**, then open canonical authority, then install the
+full router. If authority fails the node keeps serving diagnostics rather than
+dying silently, so an operator can still ask what went wrong.
+
+**MCP.** `sovereign-sync --mode mcp` moved to this repository with the crate
+(`change-cpc-004`) and the Companion's installer owns its registration. The 4
+other stdio MCPs (`sycophancy-correction`, `liter-llm`,
 `sequential-thinking`, `tavily`) remain stdio because they are
 spawned by the AI client (Claude Code, Codex, etc.), not by the
 Companion. The Companion's relationship to those is
@@ -2237,7 +2277,7 @@ The A2UI surface is verified by:
 ## 14 · P2P pairing, device identity, sovereign-sync integration
 
 The Companion is a sovereign-sync node. Pairing a new device is a
-Tailscale-style flow over Noise + Iroh QUIC.
+Tailscale-style flow over Iroh QUIC, authenticated by Ed25519 endpoint identity.
 
 ### 14.1 This device's identity
 
@@ -2248,12 +2288,20 @@ the P2P overlay; the private key never leaves the device.
 
 ### 14.2 Pairing flow
 
+**Corrected by `change-cpc-006`.** There is no Noise handshake. `grep -i noise`
+over the sovereign-sync sources and manifest returns nothing: peers authenticate
+by **Ed25519 EndpointId over iroh's QUIC/TLS 1.3**, and admission is a pairing
+ticket plus an endpoint allowlist (`export_ticket` / `import_ticket` /
+`authorize_endpoint`). The steps below describe what is implemented.
+
 1. Operator clicks "Pair new device" in the tray menu
-2. The Companion generates a 6-digit short code and a Noise
-   handshake payload, displays both as a QR
-3. The new device scans the QR, dials the local endpoint
-4. Both sides complete the Noise handshake (the same primitive
-   sovereign-sync already implements)
+2. The Companion exports a pairing ticket — group secret, endpoint id, and
+   signing-key fingerprint, base64url — and displays it as a
+   `prometheus://pair?ticket=…` QR code
+3. The new device scans the QR and imports the ticket
+4. The importing side verifies the ticket's protocol version, group secret
+   length, endpoint id, and signing-key fingerprint, then authorizes that
+   endpoint; the transport itself is authenticated by iroh's QUIC/TLS 1.3
 5. The new device sends its capability manifest (`mobile` /
    `desktop` / `cli` / `headless`) and authorized-skill list
 6. The Companion shows a "Pair this device?" dialog with the
@@ -2321,6 +2369,18 @@ export const AGUIEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.approval'),     runId: z.string(), reason: z.string() }),
 ])
 ```
+
+**Amended by `change-cpc-005`.** AG-UI has two consumers, not one:
+
+- **The Companion's own UI** consumes it over **Tauri events**, as the code
+  below shows. No HTTP, no serialization round trip.
+- **External callers** — the pack's `prometheus` CLI, other machines, the
+  Codex/Kimi harnesses — consume the **SSE** stream on the control socket.
+
+The original text described only the first and would have been read as
+forbidding the second. Both are required: dropping SSE would break every
+existing external consumer, and routing the Companion's own UI through HTTP
+would add a hop for no benefit.
 
 ### 15.2 The consumer
 
@@ -2421,6 +2481,15 @@ pub struct ChildState {
 
 ### 16.4 The dependency order
 
+**Amended by `change-cpc-007`.** The nine-service in-process list below
+predates operator decision D-02 (option D) and no longer describes the
+architecture. Kept struck through rather than deleted, so a reader following
+history sees what changed and why — see [`docs/decisions/`](decisions/) for
+D-02 itself.
+
+<details>
+<summary>Superseded: the original in-process dependency order</summary>
+
 ```
 surreal (sidecar, optional) → surreal-memory (in-process)
                             → prometheus-knowledge (in-process)
@@ -2433,9 +2502,36 @@ surreal (sidecar, optional) → surreal-memory (in-process)
                             → prometheus-exec (in-process)
 ```
 
-The Companion's UI is the "topmost" — it subscribes to the
-supervisor's events but does not depend on any specific child
-being ready (the dashboard shows "loading" gracefully).
+</details>
+
+**What actually runs where, as of `change-cpc-007`:**
+
+The pack installs and owns every one of those nine services, and they keep
+running exactly where the pack put them (D-02: "adoption, not relocation" —
+see `docs/integration-contract.md` Seam 3). None of them link into this
+process. The Companion hosts exactly **one** in-process thing: its own
+`sovereign-sync` node (§4.1), reached over the contract socket. Everything
+else is **adopted**: `crates/prometheus-substrate::supervisor::Supervisor`
+reads the pack's generated `shared/services.manifest.json`, probes each
+entry — on its own endpoint when it has one (2 of 12 services today), through
+`launchctl print`/`systemctl --user show` otherwise (the other 10) — and
+restarts a service **through the platform supervisor**
+(`launchctl kickstart` / `systemctl --user restart`) when found down. It never
+starts, stops, or links a pack service directly.
+
+So there is no dependency order to draw among these nine: they are not this
+process's children, and this process does not sequence their startup. The
+only real order is the Companion's own: bind the contract socket and answer
+`/health` before opening its node's authority (§4.1's "not negotiable"
+ordering), then attach supervision, then install the full router
+(`crates/prometheus-substrate/src/node.rs`).
+
+The Companion's UI is the "topmost" of the one thing it does host — it
+subscribes to `Supervisor::subscribe()`'s folded `TrayState`
+(`crates/prometheus-substrate/src/health.rs`) and repaints the tray icon
+(`src-tauri/src/tray.rs`) on change, but does not depend on any specific
+adopted service being healthy to render (the tray shows `Starting` gracefully
+until the first probe pass completes).
 
 ### Skills used
 - `rust/actor-model/SKILL.md` (the mpsc actor pattern)
@@ -2593,23 +2689,577 @@ back visibly (toast + SyncChip detail).
 
 ---
 
-## 19 · Mobile parity (Pillar 6 — Tauri 2.0 mobile targets)
+## 18.5 · Connected Skill Packages Management (Pillar 7 — HMA × PMP × Companion joint work)
 
-The same Rust crate (`prometheus-companion_lib`) compiles to
-iOS and Android via Tauri 2.0 mobile. The React frontend is the
-same. The only changes are:
+The Companion is not just a substrate supervisor. It is also
+the **operator's view of the skill package ecosystem**. The
+Companion can install, upgrade, validate, and remove
+git-based skill packages (the HMA is the canonical
+example) without leaving the tray app. This section is
+the Companion-side of the joint design in
+`/Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/05-hma-pmp-companion-architecture.md`.
 
-- `tauri.conf.json` adds `mobile` targets (`pnpm tauri ios init`,
-  `pnpm tauri android init`)
-- The title bar component returns `null` on mobile (per the
-  HMA titlebar skill surface decision)
-- The mobile-navigation skill applies: bottom bar on phone, rail
-  on tablet
-- Native plugins: `tauri-plugin-biometric`,
-  `tauri-plugin-secure-storage`, `tauri-plugin-haptics`,
-  `tauri-plugin-geolocation`, `tauri-plugin-notification`
+### 18.5.1 The data model (PEM 3.x, application layer)
 
-### 19.1 The mobile feature split
+```ts
+// src/domain/entities/skill-package.ts
+import { defineEntity } from '@prometheus-ags/prometheus-entity-management'
+
+export const skillPackageEntity = defineEntity({
+  name: 'skillPackage',
+  privacyClass: 'public',
+  fields: {
+    id:           { type: 'id', clientId: true },
+    tenantId:     { type: 'string', nullable: false, indexed: true },
+    updatedAt:    { type: 'datetime', nullable: false, indexed: true },
+    label:        { type: 'string', nullable: false },
+    slug:         { type: 'string', nullable: false, indexed: true },
+    version:      { type: 'string', nullable: false },
+    gitUrl:       { type: 'string', nullable: false },
+    gitRef:       { type: 'string', nullable: false },
+    installedSha: { type: 'string' },
+    installPath:  { type: 'string', nullable: false },
+    marketplaceJson: { type: 'jsonb' },
+    enabled:      { type: 'boolean', nullable: false },
+    enabledPlugins: { type: 'string[]' },
+    enabledSkills:  { type: 'string[]' },
+    pmpCompatibility: { type: 'string' },
+    lastValidatedAt: { type: 'datetime' },
+    lastValidationResult: {
+      type: 'enum',
+      enum: ['ok', 'warn', 'fail', 'unknown'],
+    },
+  },
+})
+```
+
+`lane`: **relational** (server-authoritative LWW). The
+git SHA is the natural conflict-resolution key.
+
+### 18.5.2 The application hooks (consumed by the UI)
+
+```ts
+// src/application/hooks/use-skill-packages.ts
+import { useEntity, useEntities, useEntityMutation } from '@prometheus-ags/prometheus-entity-management/react'
+import { useAppContext } from '@/presentation/app-context'
+import { skillPackageEntity } from '@/domain/entities/skill-package'
+
+export function useSkillPackageList() {
+  return useEntities(skillPackageEntity, { orderBy: { label: 'asc' } })
+}
+
+export function useInstallSkillPackage() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(skillPackageEntity, 'installSkillPackage', {
+    optimistic: true,
+    execute: (spec: SkillPackageSpec) => useCases.skillPackages.install(spec),
+  })
+}
+
+export function useUpgradeSkillPackage() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(skillPackageEntity, 'upgradeSkillPackage', {
+    optimistic: true,
+    execute: ({ id, targetSha }) => useCases.skillPackages.upgrade(id, targetSha),
+  })
+}
+
+export function useValidateSkillPackage() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(skillPackageEntity, 'validateSkillPackage', {
+    execute: (id: string) => useCases.skillPackages.validate(id),
+  })
+}
+
+export function useRemoveSkillPackage() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(skillPackageEntity, 'removeSkillPackage', {
+    execute: ({ id, confirm }) => useCases.skillPackages.remove(id, confirm),
+  })
+}
+```
+
+### 18.5.3 The application use case (install example)
+
+```ts
+// src/application/use-cases/skill-packages/install-skill-package.ts
+import type { SkillPackagePort } from '@/domain/ports/skill-package-port'
+import { DomainError } from '@/domain/errors/domain-error'
+
+export function makeInstallSkillPackage(deps: {
+  skillPackages: SkillPackagePort
+  harness: HarnessPort
+}) {
+  return async function installSkillPackage(spec: SkillPackageSpec) {
+    if (!spec.gitUrl) throw new DomainError('install-skill-package: gitUrl required')
+
+    // 1. git clone to ~/.prometheus/skill-packages/<id>/
+    const target = await deps.skillPackages.resolveInstallPath(spec.id)
+    if (await deps.skillPackages.exists(target)) {
+      throw new DomainError(`install-skill-package: ${spec.id} already installed`)
+    }
+    await deps.skillPackages.gitClone(spec, target)
+
+    // 2. Verify the install contract (the 4 conditions)
+    const report = await deps.skillPackages.validateInstallContract(target)
+    if (!report.ok) {
+      await deps.skillPackages.rm(target)
+      throw new DomainError(
+        `install-skill-package: contract failed: ${report.errors.join('; ')}`
+      )
+    }
+
+    // 3. Register with the active harness
+    await deps.harness.registerSkillPackage(target, spec.id)
+
+    // 4. Persist the PEM entity
+    return deps.skillPackages.upsertSkillPackage({
+      id: spec.id, label: spec.label, slug: spec.id,
+      version: report.version, gitUrl: spec.gitUrl, gitRef: spec.gitRef,
+      installedSha: report.installedSha, installPath: target,
+      marketplaceJson: report.marketplaceJson, enabled: true,
+      enabledPlugins: report.plugins, enabledSkills: report.skills,
+      pmpCompatibility: report.pmpCompatibility,
+      lastValidatedAt: new Date().toISOString(), lastValidationResult: 'ok',
+    })
+  }
+}
+```
+
+### 18.5.4 The infrastructure port and Tauri command
+
+```ts
+// src/domain/ports/skill-package-port.ts
+import type { SkillPackageSpec, ValidationReport, SkillPackage } from '@/domain/entities/skill-package'
+
+export interface SkillPackagePort {
+  resolveInstallPath(id: string): Promise<string>
+  exists(path: string): Promise<boolean>
+  gitClone(spec: SkillPackageSpec, target: string): Promise<void>
+  validateInstallContract(target: string): Promise<ValidationReport>
+  rm(path: string): Promise<void>
+  upsertSkillPackage(pkg: SkillPackage): Promise<void>
+  listInstalled(): Promise<SkillPackage[]>
+}
+```
+
+The Tauri commands (in `crates/prometheus-companion/src/commands/skill_packages.rs`)
+implement the port:
+
+```rust
+#[tauri::command]
+pub async fn install_skill_package(
+    state: State<'_, AppState>,
+    spec: SkillPackageSpec,
+) -> Result<SkillPackage, String> {
+    let target = state.skill_packages
+        .resolve_install_path(&spec.id)
+        .await.map_err(|e| e.to_string())?;
+    if state.skill_packages.exists(&target).await {
+        return Err(format!("{} already installed", spec.id));
+    }
+    state.skill_packages.git_clone(&spec, &target).await
+        .map_err(|e| e.to_string())?;
+    let report = state.skill_packages.validate_install_contract(&target).await
+        .map_err(|e| e.to_string())?;
+    if !report.ok {
+        state.skill_packages.rm(&target).await.ok();
+        return Err(format!("contract failed: {:?}", report.errors));
+    }
+    state.harness.register_skill_package(&target, &spec.id).await
+        .map_err(|e| e.to_string())?;
+    state.skill_packages.upsert(&report.to_pem()).await
+        .map_err(|e| e.to_string())?;
+    Ok(report.to_pem())
+}
+```
+
+### 18.5.5 The UI page
+
+The "Plugins & Skill Packages" page lives in Settings and
+shows: the connected list, a "Discover" tab, and a health
+section. See the joint HMA spec §4.2 for the wireframe
+and the styling (CLEAN + kebab-case + shadcn Base UI).
+
+### 18.5.6 The Realtime skill-refiner panel
+
+The Companion's UI also has a **"Refinement queue" panel**
+that surfaces the `realtime-skill-refiner` HMA skill
+(see
+[`/Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/04-skill-refiner-loop.md`](file:///Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/04-skill-refiner-loop.md)).
+
+The 5-stage Detect → Triage → Refine → Verify → Ship
+loop always halts at Triage for human approval (per the
+architecture review's "producer never grades its own
+work" rule).
+
+### 18.5.7 The hooks-reliability enforcement
+
+The Companion's `doctor` command runs the HMA's
+`scripts/verify-hooks-reliability.sh` against every
+installed skill package that ships a `hooks/hooks.json`.
+The verify script checks the 9 fixes from the
+architecture review §6 (per
+[`/Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/03-hooks-reliability.md`](file:///Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/03-hooks-reliability.md)).
+
+### 18.5.8 The log monitor for connected services
+
+The Companion's `log_monitor` Tauri command tails every
+connected service's log file (including those declared
+in the HMA's plist or the Companion's own substrate
+services). On a "FATAL" pattern, the monitor calls the
+`realtime-skill-refiner` skill via the A2UI bridge. See
+the joint HMA spec §7 for the full pattern.
+
+### 18.5.9 The Supervisors panel
+
+The Companion's UI has a **"Supervisors" panel** (in
+Settings → Supervisors) that lists every launchd /
+systemd / Scheduled Task plist managed by the HMA's
+`launchagent-supervisor` skill. Per-row: status, last
+exit, self-heal count, "View plist", "Restart", "Disable",
+"Re-bootstrap".
+
+### 18.5.10 Skills used (this section)
+
+- `hybrid-mobile-architecture/skills/connected-skill-packages` (new in HMA v0.2.0)
+- `hybrid-mobile-architecture/skills/realtime-skill-refiner` (new)
+- `hybrid-mobile-architecture/skills/claude-hooks-reliability` (new)
+- `hybrid-mobile-architecture/skills/launchagent-supervisor` (new)
+- `hybrid-mobile-architecture/skills/tauri-tray-app` (new)
+- `prometheus-skill-pack/skills/pem-local-first` (the entity pattern)
+- `prometheus-skill-pack/skills/process/skill-refiner` (the underlying refinement)
+- `prometheus-skill-pack/skills/process/sycophancy-correction` (the bug detector)
+
+---
+
+## 18.6 · Auto Skill Package Integration (the no-friction path)
+
+The "Connected Skill Packages" section (§18.5) is the
+**manual** path: install, upgrade, validate, remove.
+This section is the **no-friction** path: the operator
+points the Companion at a source, and the Companion
+auto-detects new skills and installs them.
+
+Two source types are supported:
+
+| Source | What it is | How the Companion watches it |
+|---|---|---|
+| **Git URL** | a git repo with a `marketplace.json` at the root (the HMA, the PMP, any third-party marketplace) | `git fetch` + `git diff` every N minutes (configurable; default 15 min) |
+| **Local directory** | a directory on disk with a `SKILL.md` per subdir | `notify` (macOS) / `inotifywait` (Linux) / `ReadDirectoryChangesW` (Windows) for fs events |
+
+The full spec is at
+`/Users/gqadonis/Projects/hybrid-mobile-architecture-src/docs/08-auto-skill-package-integration.md`.
+The HMA-side `auto-skill-package-integration` skill ships
+in HMA v0.2.0.
+
+### 18.6.1 The data model (PEM 3.x, application layer)
+
+```ts
+// src/domain/entities/skill-source.ts
+import { defineEntity } from '@prometheus-ags/prometheus-entity-management'
+
+export const skillSourceEntity = defineEntity({
+  name: 'skillSource',
+  privacyClass: 'local',   // never server-synced
+  fields: {
+    id: { type: 'id', clientId: true },
+    label: { type: 'string' },
+    kind: { type: 'enum', enum: ['git', 'local-dir'] },
+    location: { type: 'string' },
+    branch: { type: 'string' },
+    mode: { type: 'enum', enum: ['confirm', 'auto'] },
+    pollIntervalSec: { type: 'number' },
+    enabled: { type: 'boolean' },
+    lastSeenSha: { type: 'string' },
+    lastSeenMtime: { type: 'number' },
+    lastCheckAt: { type: 'datetime' },
+    lastDetectedSkills: { type: 'string[]' },
+    verifiedPublisher: { type: 'boolean' },
+  },
+})
+
+// src/domain/entities/detected-skill.ts
+export const detectedSkillEntity = defineEntity({
+  name: 'detectedSkill',
+  privacyClass: 'local',
+  fields: {
+    id: { type: 'id', clientId: true },
+    sourceId: { type: 'string', indexed: true },
+    packageId: { type: 'string' },
+    skillName: { type: 'string' },
+    detectedAt: { type: 'datetime' },
+    installPath: { type: 'string' },
+    status: { type: 'enum', enum: [
+      'new', 'confirmed', 'installing', 'installed', 'skipped', 'failed'
+    ] },
+    errorMessage: { type: 'string' },
+  },
+})
+```
+
+`lane`: **local** (never server-synced). The detected
+state is local to the operator's machine.
+
+### 18.6.2 The application hooks (consumed by the UI)
+
+```ts
+// src/application/hooks/use-skill-sources.ts
+import { useEntities, useEntity, useEntityMutation } from '@prometheus-ags/prometheus-entity-management/react'
+import { useAppContext } from '@/presentation/app-context'
+import { skillSourceEntity, detectedSkillEntity } from '@/domain/entities/skill-source'
+import { detectedSkillEntity } from '@/domain/entities/detected-skill'
+
+export function useSkillSourceList() {
+  return useEntities(skillSourceEntity, { orderBy: { label: 'asc' } })
+}
+
+export function useDetectedSkillList() {
+  return useEntities(detectedSkillEntity, {
+    where: { status: 'new' },
+    orderBy: { detectedAt: 'desc' },
+  })
+}
+
+export function useAddSkillSource() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(skillSourceEntity, 'addSkillSource', {
+    optimistic: true,
+    execute: (spec: SkillSourceSpec) => useCases.skillSources.add(spec),
+  })
+}
+
+export function useConfirmDetectedSkill() {
+  const { useCases } = useAppContext()
+  return useEntityMutation(detectedSkillEntity, 'confirmDetectedSkill', {
+    execute: (id: string) => useCases.skillSources.confirm(id),
+  })
+}
+
+export function useCheckAllSkillSources() {
+  const { useCases } = useAppContext()
+  return useCases.skillSources.checkAll()
+}
+```
+
+### 18.6.3 The application use case (the periodic check)
+
+```ts
+// src/application/use-cases/skill-sources/periodic-check.ts
+import type { SkillSourcePort } from '@/domain/ports/skill-source-port'
+import type { SkillPackagePort } from '@/domain/ports/skill-package-port'
+import type { HarnessPort } from '@/domain/ports/harness-port'
+import { DomainError } from '@/domain/errors/domain-error'
+
+export function makePeriodicCheck(deps: {
+  skillSources: SkillSourcePort
+  skillPackages: SkillPackagePort
+  harness: HarnessPort
+}) {
+  return async function periodicCheck() {
+    const sources = await deps.skillSources.listAll()
+    const results = []
+
+    for (const source of sources) {
+      if (!source.enabled) continue
+
+      let detected = []
+      try {
+        if (source.kind === 'git') {
+          detected = await deps.skillSources.pollGit(source)
+        } else {
+          detected = await deps.skillSources.scanLocalDir(source)
+        }
+      } catch (err) {
+        results.push({ source, error: err.message })
+        continue
+      }
+
+      // 4-condition install contract on each
+      for (const skill of detected) {
+        const report = await deps.skillPackages.validateInstallContract(skill.installPath)
+        if (!report.ok) {
+          await deps.skillSources.recordFailure(source, skill, report.errors)
+          continue
+        }
+
+        if (source.mode === 'auto' && source.verifiedPublisher) {
+          // Auto-install
+          await deps.skillPackages.installFromPath(skill)
+          await deps.harness.registerSkillPackage(skill.installPath, skill.packageId)
+        }
+        // (else: confirm mode — surface in UI as a `detectedSkill`)
+      }
+    }
+
+    return results
+  }
+}
+```
+
+The periodic check is called by a timer:
+
+- **macOS:** a `StartInterval` LaunchAgent that calls
+  `prometheus-substrate periodic-check` every N minutes
+- **Linux:** a systemd `.timer` + `.service`
+- **In the Companion itself:** a `tokio::spawn` task on
+  startup that runs every N minutes
+
+### 18.6.4 The Tauri commands
+
+```rust
+// crates/prometheus-companion/src/commands/skill_sources.rs
+#[tauri::command]
+pub async fn add_skill_source(spec: SkillSourceSpec) -> Result<SkillSource, String>;
+
+#[tauri::command]
+pub async fn remove_skill_source(id: String) -> Result<(), String>;
+
+#[tauri::command]
+pub async fn check_skill_source(id: String) -> Result<Vec<DetectedSkill>, String>;
+
+#[tauri::command]
+pub async fn check_all_skill_sources() -> Result<HashMap<String, Vec<DetectedSkill>>, String>;
+
+#[tauri::command]
+pub async fn confirm_detected_skill(id: String) -> Result<(), String>;
+
+#[tauri::command]
+pub async fn skip_detected_skill(id: String) -> Result<(), String>;
+```
+
+### 18.6.5 The UI (the "Auto-integrate" panel)
+
+A new "Auto-integrate" panel in the Connected Skill
+Packages page shows:
+
+- The watched sources (git URLs and local directories)
+- The detected-but-not-installed skills (one row each)
+  with "Install" / "Skip" actions
+- The installed skills (with their source attribution)
+- A per-source "Last checked at" + "Last detected" + "Mode"
+- A per-source "Check now" button (manual re-scan)
+- A "Watch a directory…" button (opens a file picker)
+- A "Watch a git URL…" button (opens a URL form)
+
+See the HMA spec §7 for the full wireframe.
+
+### 18.6.6 The security considerations
+
+The local-directory source is the **most dangerous**
+source type, because a malicious file in a watched
+directory could be auto-installed if the operator chose
+auto mode for an untrusted directory. Defenses:
+
+1. **The 4-condition install contract** — `SKILL.md`
+   files are validated against the contract; malicious
+   files (e.g. with embedded `curl ... | bash`) are
+   flagged
+2. **The `verifiedPublisher` flag** — only sources the
+   operator has marked trusted can run in auto mode
+3. **The "auto mode" warning** — when the operator tries
+   to enable auto mode for an unverified source, the
+   Companion shows: "Auto mode is risky for unverified
+   sources. Confirm mode is recommended."
+4. **The skill-refiner loop** — if a watched skill
+   produces a sycophancy flag or a log monitor hit, the
+   Companion auto-opens a `bugTicket` and runs the
+   realtime skill-refiner loop
+
+### 18.6.7 The recommended sources (shipped with the Companion)
+
+The Companion ships with a default
+`recommended-sources.json`:
+
+```jsonc
+[
+  {
+    "id": "hma-marketplace",
+    "label": "KnowMe Builder (Hybrid Mobile Architecture)",
+    "kind": "git",
+    "location": "https://github.com/Know-Me-Tools/hybrid-mobile-architecture-skill.git",
+    "branch": "main",
+    "mode": "confirm",
+    "pollIntervalSec": 900,
+    "verifiedPublisher": true
+  },
+  {
+    "id": "prometheus-skill-pack",
+    "label": "Prometheus Skill Pack",
+    "kind": "git",
+    "location": "https://github.com/Prometheus-AGS/prometheus-skill-system.git",
+    "branch": "main",
+    "mode": "confirm",
+    "pollIntervalSec": 900,
+    "verifiedPublisher": true
+  },
+  {
+    "id": "user-shared-skills",
+    "label": "My team's shared skills",
+    "kind": "local-dir",
+    "location": "~/my-org-skills",
+    "mode": "auto",
+    "verifiedPublisher": true
+  }
+]
+```
+
+### 18.6.8 Skills used (this section)
+
+- `hybrid-mobile-architecture/skills/auto-skill-package-integration`
+  (new in HMA v0.2.0; the canonical source of truth for
+  this feature)
+- `hybrid-mobile-architecture/skills/connected-skill-packages`
+  (the install / upgrade / validate / remove operations)
+- `prometheus-skill-pack/skills/pem-local-first` (the entity
+  pattern)
+- `prometheus-skill-pack/skills/process/skill-refiner` (the
+  malicious-skill detector)
+
+---
+
+## 19 · Mobile parity (Pillar 6 — Flutter + Rust over FFI)
+
+The same Rust crate (`prometheus-companion_lib`) ships as the
+mobile binary — the only change is the **UI shell**: a separate
+Flutter app (Dart) that talks to the Rust core over FFI via
+`flutter_rust_bridge`. The React frontend that powers desktop
+**does not** run on mobile. Tauri 2.0 mobile is explicitly out
+of scope (Tauri is the desktop shell, full stop).
+
+The HMA's central architectural commitment is exactly this:
+**Flutter mobile / Tauri desktop, one Rust core, FFI seam**.
+Validated by 1Password (Rust core + per-platform shells) and
+AppFlowy (Flutter + Rust core). Same crates, different shells,
+one substrate binary.
+
+### 19.1 The mobile app skeleton
+
+```
+prometheus-companion/
+├── apps/
+│   ├── desktop/                    # Tauri 2.0 + React 19 + Vite
+│   │   ├── src/                    # the React app
+│   │   └── src-tauri/              # the Tauri host
+│   └── mobile/                     # NEW — Flutter + Rust FFI
+│       ├── lib/                    # Dart UI (Material 3 + Cupertino)
+│       ├── ios/                    # iOS Runner
+│       ├── android/                # Android Runner
+│       └── rust/                   # ← flutter_rust_bridge generated
+│                                     bindings; re-exports the substrate
+├── crates/
+│   ├── prometheus-substrate/       # the Rust core (shared)
+│   └── prometheus-companion_lib/   # the FFI surface (new)
+└── pubspec.yaml                    # Flutter dependencies
+```
+
+The `prometheus-companion_lib` crate is the **FFI surface** —
+it wraps `prometheus-substrate` and exposes the same async
+functions to Dart that the desktop React app consumes via
+Tauri commands. `flutter_rust_bridge` generates the Dart
+bindings at build time from the Rust function signatures.
+
+### 19.2 The mobile feature split
 
 The substrate has a `mobile` feature that excludes the heavy
 services:
@@ -2617,9 +3267,7 @@ services:
 ```toml
 # crates/prometheus-substrate/Cargo.toml
 [features]
-default = ["client", "executor", "knowledge", "skills",
-           "forge", "surface", "literllm", "exec", "sovereign",
-           "research", "kpi-open"]
+default = ["desktop"]
 mobile = ["client", "skills", "literllm", "sovereign", "exec-core"]
 desktop = ["client", "executor", "knowledge", "skills",
            "forge", "surface", "literllm", "exec", "sovereign",
@@ -2627,19 +3275,21 @@ desktop = ["client", "executor", "knowledge", "skills",
 ```
 
 A `prometheus mobile build` invocation uses
-`--no-default-features --features mobile` so the mobile binary is
-small enough for a phone.
+`--no-default-features --features mobile` so the FFI binary is
+small enough for a phone. The Flutter app is ~10 MB; the FFI
+binary is ~25 MB; total ~35 MB on TestFlight.
 
-### 19.2 The mobile wire format
+### 19.3 The mobile wire format (over the FFI seam)
 
-The mobile app connects to a Companion desktop install (or any
-authorized Prometheus node) over the Iroh QUIC transport. The
-wire format is the **same AG-UI SSE protocol** the desktop uses.
-The mobile app opens an Iroh `quinn::Connection`, wraps it in an
+The Flutter app calls into the FFI binary **synchronously** for
+local operations (skill search, receipt read) and **over Iroh
+QUIC** for offloaded operations (skill execution). The wire
+format is the **same AG-UI SSE protocol** the desktop uses. The
+mobile app opens an Iroh `quinn::Connection`, wraps it in an
 HTTP/1.1 request, and the node serves the same endpoints. Zero
-new protocol design.
+new protocol design — same Rust protocol implementation.
 
-### 19.3 The mobile sync story
+### 19.4 The mobile sync story
 
 The mobile app is a **thin client for orchestration**, not a peer
 that runs the full stack. The mobile substrate enforces the
@@ -2648,19 +3298,76 @@ through sovereign-sync. If the phone is offline, it queues jobs
 in the local learning queue (the same one `prometheus-learning-
 worker` already drains) and sends them when connectivity returns.
 
-### 19.4 The "no title bar on mobile" rule (re-stated)
+### 19.5 The Flutter native plugins
+
+| Flutter package | What it does |
+|---|---|
+| `local_auth` | Face/Touch ID gate for the device identity |
+| `flutter_secure_storage` | Store the Ed25519 device key in Keychain / Keystore |
+| `flutter_local_notifications` | Local push for receipts, completed jobs |
+| `flutter/services.dart` HapticFeedback | Confirmations, alerts (built-in) |
+| `geolocator` | Optional: tag receipts with location |
+| `device_info_plus` + `dart:io` `Platform` | Detect platform for the dashboard |
+
+### 19.6 The "no desktop chrome on mobile" rule (re-stated)
 
 The HMA titlebar skill is explicit: the title bar is a
-**desktop-window** concern. The mobile app's chrome is a
-`NavigationBar` per platform convention (iOS HIG, M3 Navigation
-bar). The mobile React tree never imports the Titlebar
-component; the surface-decision rule (§6.1) handles this.
+**desktop-window** concern. Flutter has its own per-platform
+chrome (Cupertino `NavigationBar` on iOS, Material 3
+`NavigationBar` on Android). The mobile app **does not** use
+`tauri-custom-titlebar`; that skill is desktop-only.
 
 ### Skills used
-- `tauri-react-vite/SKILL.md` (mobile target initialization)
-- `mobile-navigation/SKILL.md` (the bottom-bar rule)
-- `tauri-custom-titlebar/SKILL.md` (the no-title-bar rule on
-  mobile)
+- `flutter-rust-ffi/SKILL.md` (the FFI codegen + binding
+  pattern)
+- `flutter-building-forms/SKILL.md` (the Form / Riverpod
+  patterns)
+- `mobile-navigation/SKILL.md` (the bottom-bar rule — also
+  applies to Flutter via `NavigationBar` widgets)
+- `dart-flutter-patterns/SKILL.md` (the general Dart/Flutter
+  idiom pack)
+
+### 19.7 The `apps/mobile/pubspec.yaml` (canonical Flutter deps)
+
+```yaml
+name: prometheus_companion_mobile
+description: Prometheus Mobile — Flutter shell over the Rust substrate
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.0
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # FFI to the Rust substrate
+  flutter_rust_bridge: ^2.0
+  # Platform-native
+  local_auth: ^2.3              # Face / Touch ID gate
+  flutter_secure_storage: ^9.2   # Ed25519 keypair in Keychain / Keystore
+  flutter_local_notifications: ^17.0
+  geolocator: ^13.0
+  device_info_plus: ^11.0
+  # Iroh P2P over QUIC (Dart side)
+  iroh: ^0.1
+  # State + forms
+  flutter_riverpod: ^2.5
+  freezed_annotation: ^2.4
+  json_annotation: ^4.9
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0
+  build_runner: ^2.4
+  freezed: ^2.5
+  json_serializable: ^6.8
+
+flutter:
+  uses-material-design: true
+```
 
 ---
 
@@ -2960,7 +3667,7 @@ later phase's code can be written without violating the rules.
 - [ ] Add the OS secure-store integration
       (`tauri-plugin-stronghold`)
 - [ ] Add the Iroh transport (the substrate's `sovereign_sync.rs`)
-- [ ] Add the pairing flow: QR + 6-digit code + Noise handshake
+- [ ] Add the pairing flow: QR ticket (`prometheus://pair?ticket=…`); a 6-digit PAKE short code is optional and undecided (see `change-cpc-006`). No Noise handshake — iroh QUIC/TLS 1.3 authenticates the transport
 - [ ] Write the Devices page
 - [ ] Add the capability manifest per device
 - [ ] Add the authorization check at the Axum boundary
@@ -2995,15 +3702,20 @@ later phase's code can be written without violating the rules.
 
 ### Phase 9 — Mobile target (week 9)
 
-- [ ] `pnpm tauri ios init`
-- [ ] `pnpm tauri android init`
+- [ ] `flutter create --org com.prometheus apps/mobile`
+- [ ] Add `flutter_rust_bridge` to the workspace; scaffold the
+      `prometheus-companion_lib` FFI crate
+- [ ] Generate the Dart bindings from the Rust FFI surface
+      (`flutter_rust_bridge_codegen`)
 - [ ] Apply the mobile feature split on `prometheus-substrate`
-- [ ] Add the `tauri-plugin-biometric` gate on the device
-      identity
-- [ ] Add the `tauri-plugin-secure-storage` for the Ed25519
-      keypair
-- [ ] Add the mobile navigation rail/bar
-- [ ] Add the mobile-only UI for the pairing flow
+      (`--no-default-features --features mobile`)
+- [ ] Add `local_auth` for the Face/Touch ID device-identity
+      gate
+- [ ] Add `flutter_secure_storage` for the Ed25519 keypair
+- [ ] Add the Material 3 / Cupertino `NavigationBar` per
+      platform
+- [ ] Add the mobile-only pairing flow (QR-code scan → Iroh
+      node ID)
 - [ ] Verify: TestFlight internal build, install on a phone,
       pair with a Companion desktop, see the substrate's health
       on the phone
@@ -3037,7 +3749,7 @@ map is the human protocol.
 | Add a new top-level route | `mobile-navigation` | before writing the route |
 | Add a new A2UI component | `a2ui-surface-contract` | before registering |
 | Add a new AG-UI event | `agui-event-contract` | before emitting from Rust |
-| Add a new P2P message | `axum-agent-gateway` + `peer-profile-sync` | before the Noise framing |
+| Add a new P2P message | `axum-agent-gateway` + `peer-profile-sync` | before the gossip envelope is signed |
 | Add a new provider | `deploy-hybrid-agentic-stack` (BYOK rules) | before writing the storage code |
 | Add a new hook | `tauri-react-vite` (typed IPC) | before the hook script |
 | Add a new Tauri command | `tauri-react-vite` + `rust/error-handling` | before the Rust handler |
@@ -3061,25 +3773,26 @@ map is the human protocol.
 | Risk | Severity | Mitigation |
 |---|---|---|
 | PGlite + Tauri + macOS sandbox integration is untested at the scale we need | High | Phase 1 spike: prove the PGlite-in-Tauri-macOS path before committing to it |
-| Tauri 2.0 mobile support is "production-ready but younger" (per the architecture review) | High | Phase 9 is a full week, with a TestFlight-only internal build for the first 4 weeks; no App Store submission until 1.1 |
+| Flutter + Rust FFI is a less-traveled path than Tauri 2.0 mobile; codegen surprises possible | Medium | Phase 9 begins with the smallest possible mobile app (one screen, one button) and grows. `flutter_rust_bridge` is mature (used by AppFlowy at scale). |
 | The substrate's `mobile` feature split has not been exercised in the wild | High | Phase 9 begins with the smallest possible mobile app (one screen, one button) and grows |
 | Iroh is a moving target; the API has changed across versions | Medium | Pin the version in the superworkspace; do not bump without a regression run |
 | shadcn Base UI migration cost is non-zero for any component we write by hand | Medium | Migrate leaf first (button, label, field); check shadcn-generated components before writing new ones |
 | The custom title bar removes OS-provided accessibility | Medium | The `a11y-gate` is the contract; run it on every change |
-| The substrate as in-process library means a substrate crash brings the Companion down | Medium | The supervisor's restart policy; the OS-level launchd plist restarts the whole app if it dies |
+| ~~The substrate as in-process library means a substrate crash brings the Companion down~~ **Superseded by `change-cpc-007`:** the pack's services are adopted, not linked — a crash in one of them cannot crash this process. The remaining in-process risk is narrower: this process's own node dying. | Medium | `Supervisor` restarts an adopted service through the platform supervisor (`launchctl kickstart`/`systemctl --user restart`), with backoff and a 10-failure disable cap (§16.3); the Companion's own launchd plist (`shared/launchd/ai.prometheus.companion.plist.tmpl`) restarts the Companion process itself if it dies — verified: `minimum runtime = 15` and `semaphores = { successful exit => 0, after crash => 1 }` read back from a real `launchctl print` after loading the rendered plist |
 | Tauri auto-updater on Windows requires the user to grant permission on first run | Low | Document; show a one-time prompt on first launch |
+| A headless node cannot answer the macOS keychain ACL prompt for `prometheus-kbd-device`, which the pack's daemon created | Medium | `change-cpc-005`: the headless entry point refuses to start unless a signing identity is reachable unattended (`PROMETHEUS_DEVICE_KEY_FILE`, or a managed key file). It fails with exit 1 and names both remedies *before* binding anything, rather than failing mid-mutation |
 
 ### 25.2 Tradeoffs
 
 | Decision | Alternative | Why this |
 |---|---|---|
-| Substrate as in-process library | Tauri sidecar | Antigravity-Tools pattern; the substrate is Rust we control; in-process is faster and shares the trust boundary |
+| ~~Substrate as in-process library~~ **Amended by D-02 / `change-cpc-007`:** the substrate crate (`prometheus-substrate`) is still in-process — it is this app's own Rust code, hosting this app's own node. What changed is which *services* it hosts: none of the pack's 12 services link in; they run where the pack installed them, and the substrate adopts them by manifest + platform-supervisor restart, never by linking. | Tauri sidecar (for the Companion's own node) · pack-owned adoption (for the pack's services, decided) | The Companion's own node in-process is faster and shares the trust boundary; the pack's services stay adopted because D-02 requires the pack to work fully with no Companion installed — linking them in would make the Companion a hard runtime dependency of behavior the pack must own alone |
 | Tauri 2.0 over Electron | Electron is faster to ship | Tauri 2.0 has the mobile story; the substrate is Rust; smaller binary |
 | shadcn Base UI over Radix | Radix is more mature | shadcn default is now Base UI; better combobox, better API; active monthly releases |
 | PEM 3.x over TanStack Query | TanStack Query has more docs | Query cache is the wrong layer for local-first (per `pem-local-first`); PEM is the data layer |
 | One substrate binary | Keep the 15+ processes | The architecture review is the case; the install becomes one command |
 | PGlite for local store | SQLite via FFI | PGlite is in-process; no FFI; same SQL; works on web, desktop, mobile |
-| Iroh over libp2p | libp2p is the canonical P2P stack for Rust | Iroh is modern, QUIC-native, NAT-traversal built-in, no DHT gossip tax |
+| Iroh over libp2p | libp2p is the canonical P2P stack for Rust | Iroh is modern, QUIC-native, NAT-traversal built-in, and imposes no DHT tax *by default*. **Amended by `change-cpc-006`:** Mainline DHT address lookup is now available via `iroh-mainline-address-lookup`, but it is **off by default** — enabling it publishes this node's signed pkarr record (endpoint id, relay URL, direct addresses) to the public BitTorrent DHT, so it is a per-operator opt-in rather than a default cost. mDNS (`iroh-mdns-address-lookup`) is on by default and stays on the local link |
 | A2UI in-Companion over a separate surface | Separate web app for A2UI | The Companion is the operator's primary surface; A2UI is part of it |
 | Custom title bar with platform-correct controls | Use the OS title bar | The user explicitly asked for it; brand lockup is part of the design |
 
@@ -3149,7 +3862,7 @@ the **rules** that go in them.
 | **§2 Progress signaling** | "Starting phase X out of Y" / "Completed phase X out of Y" at every task boundary. | `prometheus-skill-pack/AGENTS.md` ("Progress Signaling MANDATORY") |
 | **§3 File naming** | **Kebab-case for every TypeScript file** (and folder). The only exceptions are `__root.tsx`, `index.ts`, and framework-mandated file names. | (this project — adopted §7.1) |
 | **§4 Layer rule (CLEAN)** | Domain → Application → Infrastructure → Presentation. Domain imports nothing. Application imports Domain. Infrastructure implements Application ports. Presentation imports Application + Domain. **No cross-layer imports. No `invoke()` / `listen()` in components. No `useEffect` data fetching.** | `clean-architecture/SKILL.md` + `entity-graph-web-shell/SKILL.md` |
-| **§5 Tauri surface gating** | Every `@tauri-apps/*` import is wrapped in `isTauri()`. Web build must not crash. Title bar is desktop only; mobile gets a platform app bar. | `tauri-custom-titlebar/SKILL.md` |
+| **§5 Tauri surface gating** | Every `@tauri-apps/*` import is wrapped in `isTauri()`. Web build must not crash. Title bar is desktop only; **mobile has its own Flutter app** (Material 3 / Cupertino `NavigationBar` per platform) — Tauri is never imported on mobile. | `tauri-custom-titlebar/SKILL.md` + `flutter-rust-ffi/SKILL.md` |
 | **§6 Custom title bar** | `decorations: false` + `titleBarStyle: Overlay` + `hiddenTitle: true` on the main window. macOS traffic lights **left** (close / minimize / maximize). Windows-Linux min / max / close **right**. `data-tauri-drag-region` **and** explicit `startDragging()` on left-button mousedown. Real `<button>` with `aria-label` on every control. | `tauri-custom-titlebar/SKILL.md` + `a11y-gate/SKILL.md` |
 | **§7 Mobile navigation** | Top-level destinations go in a **bottom bar** on every platform. Switch to a **rail by width** (≥ 600px). One list, never two. No `Platform.isIOS` checks. | `mobile-navigation/SKILL.md` |
 | **§8 Component library** | shadcn/ui with **Base UI** primitives (`@base-ui-components/react`). No direct Radix imports. The `components.json` `base: "base-ui"` key is the source of truth. Strangler-fig for any leftover Radix. | (this project — adopted §9) |
@@ -3296,16 +4009,17 @@ tauri-plugin-opener = "2"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 tauri-plugin-store = "2"
 tauri-plugin-stronghold = "2"
-tauri-plugin-notification = "2"
+tauri-plugin-notification = "2"          # desktop only; mobile uses flutter_local_notifications
 tauri-plugin-os = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
-tauri-plugin-biometric = "2"             # for mobile parity
-tauri-plugin-secure-storage = "2"        # for mobile parity
-tauri-plugin-haptics = "2"               # for mobile parity
+# Biometric, secure-storage, haptics: NOT here. Mobile is Flutter; those
+# capabilities live in apps/mobile/pubspec.yaml as local_auth,
+# flutter_secure_storage, and flutter/services.dart HapticFeedback.
+# See §19.5 for the Flutter package list.
 
-# Substrate (in the superworkspace)
-prometheus-substrate = { path = "../../crates/prometheus-substrate", features = ["desktop"] }
+# Substrate (this repository's own workspace member)
+prometheus-substrate = { path = "../crates/prometheus-substrate", features = ["desktop"] }
 
 # Async / runtime
 tokio = { version = "1", features = ["full"] }
@@ -3374,41 +4088,48 @@ rust-version = "1.94"
 license = "MIT"
 
 [features]
-default = ["client", "executor", "knowledge", "skills",
-           "forge", "surface", "literllm", "exec", "sovereign",
-           "research", "kpi-open"]
-# In-process sub-services
+default = ["desktop"]
+# In-process: only what this repository actually links.
 client      = []
-executor    = ["dep:prometheus-exec"]
-knowledge   = ["dep:prometheus-knowledge"]
-skills      = ["dep:skill-index"]
-forge       = ["dep:forge-rs"]
-surface     = ["dep:surface-bridge"]
-literllm    = ["dep:liter-llm"]
-exec        = ["dep:prometheus-exec-service"]
-sovereign   = ["dep:sovereign-sync"]
-research    = ["dep:prometheus-research"]
+skills      = []                       # skill-index is a git-rev dep, always on
+sovereign   = ["dep:sovereign-sync", "dep:sovereign-client", "dep:iroh-docs-adapter"]
+mobile-sync = ["dep:kbd-mobile"]
 kpi-open    = []
+# Adopted external services (change-cpc-007) are supervised, not linked, so they
+# are not cargo features: executor, knowledge, forge, surface, literllm, exec,
+# research.
 
 # Surface presets
-desktop = ["client", "executor", "knowledge", "skills",
-           "forge", "surface", "literllm", "exec", "sovereign",
-           "research", "kpi-open"]
-mobile  = ["client", "skills", "literllm", "sovereign"]
-headless = ["client", "executor", "knowledge", "skills",
-            "forge", "literllm", "exec", "sovereign"]
+desktop  = ["client", "skills", "sovereign", "kpi-open"]
+mobile   = ["client", "skills", "sovereign", "mobile-sync"]
+headless = ["client", "skills", "sovereign"]   # no window, no Stronghold vault
 
 [dependencies]
-# Workspace-internal
-prometheus-exec          = { path = "../prometheus-exec", optional = true }
-prometheus-knowledge     = { path = "../prometheus-knowledge", optional = true }
-forge-rs                 = { path = "../forge-rs/crates/forge-core", optional = true }
-surface-bridge           = { path = "../surface-bridge", optional = true }
-liter-llm                = { path = "../liter-llm", optional = true }
-sovereign-sync           = { path = "../sovereign-sync", optional = true }
-prometheus-research      = { path = "../prometheus-research", optional = true }
-prometheus-exec-service  = { path = "../prometheus-exec-service", optional = true }
-skill-index              = { path = "../skill-index" }   # always on
+# Crates that MOVE into this repository (change-cpc-004): local workspace members.
+sovereign-sync    = { path = "../sovereign-sync", optional = true }
+sovereign-client  = { path = "../sovereign-client", optional = true }
+kbd-mobile        = { path = "../kbd-mobile", optional = true }
+iroh-docs-adapter = { path = "../iroh-docs-adapter", optional = true }
+
+# Crates that STAY in the open-source pack: consumed by git rev, never by path.
+# The pack never depends on the Companion (operator decision D-02, option D), so
+# this direction is one-way. A `path` dependency into the pack, or a committed
+# [patch] pointing at a local checkout, is a defect: it makes a Companion build
+# depend on a working copy that no other machine has.
+kbd-runtime      = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "<pack commit containing change-cpc-002>" }
+storage-provider = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "<same rev>", default-features = false }
+learner-model    = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "<same rev>" }
+skill-index      = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "<same rev>" }   # always on
+
+# Services that STAY in the pack and are adopted as external processes, not
+# linked (change-cpc-007): prometheus-exec, prometheus-knowledge, forge-rs,
+# liter-llm, surface-bridge, prometheus-research, surrealdb. The supervisor
+# reads the pack's generated `shared/services.manifest.json` and manages them
+# where they already run. They are deliberately NOT dependencies here.
+
+# Inherited transitively from kbd-runtime; pinned in versions.toml.
+# keyring =3.6.3 holds the device key as credential-store item
+# `prometheus-kbd-device`. Do not add a second major version of keyring.
 
 # Async / runtime
 tokio = { version = "1", features = ["full"] }
@@ -3444,10 +4165,10 @@ sha2 = "0.10"
 blake3 = "1"
 
 # P2P (Iroh)
-iroh = { version = "0.30", optional = true }   # gated by sovereign
+iroh = { version = "1.0.3", optional = true }  # gated by sovereign; 1.0.2 is the security floor (relay DoS)
 
 # MCP
-rmcp = { version = "0.1", features = ["server", "transport-io", "transport-sse", "macros"] }
+rmcp = { version = "1.8", features = ["server", "transport-io", "transport-sse", "macros"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -3507,10 +4228,11 @@ The full dependency plan is below.
     "@tauri-apps/plugin-notification": "^2",
     "@tauri-apps/plugin-updater": "^2",
     "@tauri-apps/plugin-window-state": "^2",
-    "@tauri-apps/plugin-stronghold": "^2",
-    "@tauri-apps/plugin-biometric": "^2",          // mobile
-    "@tauri-apps/plugin-secure-storage": "^2",     // mobile
-    "@tauri-apps/plugin-haptics": "^2",            // mobile
+    "@tauri-apps/plugin-stronghold": "^2"
+    // Biometric, secure-storage, haptics: NOT here. Mobile is Flutter;
+    // those capabilities live in apps/mobile/pubspec.yaml as local_auth,
+    // flutter_secure_storage, and flutter/services.dart HapticFeedback.
+    // See §19.5 for the Flutter package list.
 
     // Routing & state
     "@tanstack/react-router": "^1",
@@ -3591,7 +4313,8 @@ The full dependency plan is below.
   `pem-local-first`
 - **`radix-ui`** (the npm package) — replaced by `@base-ui-components/react`
 - **`electron`** — we chose Tauri
-- **`@capacitor/*`** — we chose Tauri 2.0 mobile
+- **`@capacitor/*`** — mobile is Flutter + Rust over FFI, not Capacitor
+- **`@tauri-apps/api` on mobile** — the mobile shell is Flutter, not Tauri; the desktop app uses Tauri, the mobile app uses `flutter_rust_bridge` bindings to the same Rust substrate
 - **`libp2p`** directly — the substrate's sovereign-sync uses Iroh
 - **`swr`** — same reason as TanStack Query
 

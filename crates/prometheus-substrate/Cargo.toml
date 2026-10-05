@@ -1,0 +1,63 @@
+[package]
+name = "prometheus-substrate"
+description = "The Prometheus Companion substrate: the node it hosts, and the supervisor that adopts the skill pack's services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+# `desktop` is the default so a bare `cargo build` produces what the Tauri
+# shell links. `headless` is the same node without a window or a Stronghold
+# vault — it is what the two-process integration harness launches
+# (change-cpc-011), and what a server-side deployment would run.
+default = ["desktop"]
+
+client = []
+skills = []                      # prometheus-skill-index is always linked
+sovereign = ["dep:sovereign-sync"]
+kpi-open = []
+
+desktop  = ["client", "skills", "sovereign", "kpi-open"]
+headless = ["client", "skills", "sovereign"]
+
+# Deliberately NOT features: prometheus-exec, prometheus-knowledge, forge-rs,
+# liter-llm, surface-bridge, prometheus-research, surrealdb. Those services stay
+# in the open-source pack and keep running where they are; the supervisor
+# adopts them through the pack's generated `shared/services.manifest.json`
+# (change-cpc-007). Linking them here would pull the pack's software into a
+# product that is meant to manage it, not absorb it.
+
+[dependencies]
+# Pack crates: git rev, never path (see the workspace manifest).
+kbd-runtime = { workspace = true }
+storage-provider = { workspace = true }
+learner-model = { workspace = true }
+prometheus-skill-index = { workspace = true }
+
+# Pinned in versions.toml.
+keyring = { workspace = true }
+dirs-next = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# The node this crate hosts (change-cpc-004 relocated it here).
+sovereign-sync = { path = "../sovereign-sync", optional = true }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+# The headless node: same node, no window, no vault. Built only with the
+# `sovereign` feature since it hosts the relocated control plane.
+[[bin]]
+name = "prometheus-companion-headless"
+path = "src/bin/prometheus-companion-headless.rs"
+required-features = ["sovereign"]

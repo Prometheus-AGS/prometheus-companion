@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prometheusags.ai/companion/schemas/agui-event.schema.json",
+  "title": "AG-UI Event Envelope",
+  "description": "The runtime-to-application event boundary. UAR emits authoritative run events; clients maintain projections. Unknown types are preserved and displayed, never treated as success.",
+  "type": "object",
+  "required": ["protocolVersion", "eventId", "runId", "seq", "ts", "type", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Reject an unknown MAJOR. Accept an unknown MINOR and preserve unknown fields."
+    },
+    "eventId": {
+      "type": "string",
+      "description": "Stable across retries. This is the dedupe key; a retried event with a new id is a duplicate the client cannot detect."
+    },
+    "runId": { "type": "string" },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic per run. A gap is buffered for SEQ_GAP_TIMEOUT then replayed from the last committed seq — never applied out of order."
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "type": {
+      "type": "string",
+      "description": "Known types are enumerated in knownTypes; an unrecognized value is valid and must be preserved.",
+      "examples": [
+        "run.started",
+        "text.delta",
+        "thinking.delta",
+        "tool.call.start",
+        "tool.call.args.delta",
+        "tool.call.result",
+        "surface.render",
+        "surface.action",
+        "surface.malformed",
+        "resolution.required",
+        "resolution.answered",
+        "resolution.stale",
+        "resolution.expired",
+        "approval.required",
+        "approval.decided",
+        "run.cancelled",
+        "run.failed",
+        "run.completed"
+      ]
+    },
+    "payload": { "type": "object" },
+    "causalParent": {
+      "type": "string",
+      "description": "eventId of the cause. Required on tool.call.args.delta and tool.call.result so partial arguments correlate to their call."
+    }
+  },
+  "$defs": {
+    "runStarted": {
+      "type": "object",
+      "required": ["plan", "caller", "budgets"],
+      "properties": {
+        "plan": { "$ref": "resolution-trace.schema.json#/$defs/runPlan" },
+        "caller": { "enum": ["ui", "chat", "a2a", "mobile"] },
+        "budgets": {
+          "type": "object",
+          "required": ["tokens", "wallClockMs", "toolCalls", "outputBytes"],
+          "properties": {
+            "tokens": { "type": "integer" },
+            "wallClockMs": { "type": "integer" },
+            "toolCalls": { "type": "integer" },
+            "outputBytes": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "surfaceRender": {
+      "type": "object",
+      "description": "An A2UI projection. ADR-UI-1: catalog components ride inside the frozen ContentBlock union as artifact blocks.",
+      "required": ["blockId", "artifactType", "artifactVersion", "props"],
+      "properties": {
+        "blockId": { "type": "string" },
+        "artifactType": {
+          "type": "string",
+          "description": "A registered catalog component id. An unregistered id renders UnknownSurface; the run is neither failed nor complete."
+        },
+        "artifactVersion": { "type": "integer", "minimum": 1 },
+        "props": { "type": "object" },
+        "provenance": {
+          "type": "object",
+          "description": "What the agent read to compose this. A block with no provenance is not renderable.",
+          "properties": {
+            "capabilities": { "type": "array", "items": { "type": "string" } },
+            "paths": { "type": "array", "items": { "type": "string" } },
+            "filter": { "type": "string" }
+          }
+        }
+      }
+    },
+    "surfaceAction": {
+      "type": "object",
+      "required": ["blockId", "actionId", "idempotencyKey"],
+      "properties": {
+        "blockId": { "type": "string" },
+        "actionId": { "type": "string" },
+        "payload": { "type": "object" },
+        "idempotencyKey": {
+          "type": "string",
+          "description": "A double click produces one effect. This is the component's job as much as the gateway's."
+        }
+      }
+    },
+    "runCompleted": {
+      "type": "object",
+      "required": ["receipt"],
+      "description": "The ONLY completion signal. Never infer completion from prose.",
+      "properties": {
+        "receipt": {
+          "type": "object",
+          "required": ["hash", "algorithm", "verified", "caller"],
+          "properties": {
+            "hash": { "type": "string" },
+            "algorithm": { "const": "ed25519" },
+            "verified": { "type": "boolean" },
+            "caller": { "enum": ["ui", "chat", "a2a", "mobile"] },
+            "peerNodeId": { "type": "string" },
+            "durationMs": { "type": "integer" },
+            "reverse": { "type": "string" }
+          }
+        }
+      }
+    },
+    "runCancelled": {
+      "type": "object",
+      "required": ["by", "atSeq", "sideEffects"],
+      "properties": {
+        "by": { "enum": ["operator", "peer", "policy", "budget", "disconnect"] },
+        "atSeq": { "type": "integer" },
+        "sideEffects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit, never assumed empty. A cancelled run that had already mutated says so."
+        }
+      }
+    }
+  }
+}

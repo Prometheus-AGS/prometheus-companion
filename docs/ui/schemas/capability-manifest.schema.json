@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prometheusags.ai/companion/schemas/capability-manifest.schema.json",
+  "title": "Capability Manifest",
+  "description": "The single registry every caller enumerates: the board renders a button per entry, the thread exposes it as a tool, the A2A Agent Card is generated from it, and a paired device receives a subset. No caller may author an entry.",
+  "type": "object",
+  "required": ["schemaVersion", "source", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": {
+      "type": "object",
+      "description": "The registered directory this manifest was discovered in.",
+      "required": ["id", "label", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "label": { "type": "string" },
+        "path": { "type": "string" },
+        "glossaryVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Domain glossary version used to normalize prompts against this manifest. Recorded with every resolution, because a synonym change silently changes future resolutions."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["id", "summary", "effectClass", "gate", "callers", "params", "blastRadius"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-zA-Z0-9]*)+$",
+          "description": "Dotted, stable, never renamed. A rename is a removal plus an addition."
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "One line, operator-facing. Indexed for retrieval, so write it as the thing a person would say."
+        },
+        "effectClass": {
+          "enum": ["read", "mutating", "privileged"],
+          "description": "Classified independently of any MCP annotation. Annotations are hints, never authorization."
+        },
+        "gate": {
+          "type": "string",
+          "description": "The confirmation the effect class requires, e.g. none, confirm, confirm + diff, confirm + reason, confirm + biometric, confirm per peer."
+        },
+        "callers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["ui", "chat", "a2a", "mobile"] },
+          "description": "Every listed caller gets the capability at once; removing it removes it from all of them. This is what makes caller parity structural rather than a discipline."
+        },
+        "params": {
+          "type": "object",
+          "description": "JSON Schema for the parameters. Required properties drive the underspecified verdict.",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "object" },
+            "required": { "type": "array", "items": { "type": "string" } },
+            "properties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "resolver": {
+                    "type": "string",
+                    "description": "Names a typed entity resolver (e.g. service, port, source, peer). Entity resolution is a separate pass with its own confidence and is the most common source of the underspecified verdict."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "triggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Phrases a person would actually use. Indexed lexically and semantically."
+        },
+        "negativeTriggers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Phrases that must NOT resolve here. A match removes the candidate outright; it is not down-weighted. 'reboot' resolving to service.restart is the near-miss that erodes trust fastest."
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["prompt", "params"],
+            "additionalProperties": false,
+            "properties": {
+              "prompt": { "type": "string" },
+              "params": { "type": "object" }
+            }
+          }
+        },
+        "blastRadius": {
+          "enum": ["read-only", "single-unit", "multi-unit", "fleet"],
+          "description": "Drives the score penalty and the review quorum. Above single-unit the review policy escalates to a three-judge quorum."
+        },
+        "reversible": {
+          "type": "boolean",
+          "description": "Whether a receipt can carry a reverse command. Irreversible mutating capabilities should raise their gate."
+        },
+        "personas": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Verified personas permitted to call this. Excluded at retrieval, not at execution, and the exclusion is visible in ResolutionTrace."
+        }
+      }
+    }
+  }
+}
