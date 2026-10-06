@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prometheusags.ai/companion/schemas/a2ui-catalog.schema.json",
+  "title": "A2UI Client Catalog",
+  "description": "The client owns this. The agent names a registered component and supplies validated props; it cannot ship markup, code, or a new component. Per ADR-UI-1, catalog components ride inside the frozen ContentBlock union as artifact blocks.",
+  "type": "object",
+  "required": ["schemaVersion", "catalogVersion", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "catalogVersion": {
+      "type": "string",
+      "description": "Rendered in every surface's provenance strip so the operator can see which catalog composed a block."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/component" }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "required": ["id", "group", "version", "props", "states"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "ServiceRow",
+            "LogTail",
+            "MetricSpark",
+            "TableView",
+            "ChoiceCards",
+            "FixPlan",
+            "ConfirmForm",
+            "ReceiptBlock",
+            "CandidateChoice",
+            "ParamForm",
+            "ClarifyPrompt",
+            "ResolutionTrace"
+          ],
+          "description": "Group A is projection (8), Group B is resolution (4). Adding an id is a registry entry plus a component plus a schema — never a ContentBlock variant."
+        },
+        "group": { "enum": ["projection", "resolution"] },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bumped by any prop change that is not backward compatible."
+        },
+        "props": {
+          "type": "object",
+          "description": "JSON Schema for this component's props. The generated validator rejects malformed props into MalformedSurface; it never throws into the tree and never silently drops the block."
+        },
+        "states": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "enum": ["pending-approval", "denied", "cancelled", "failed", "resumed", "completed"]
+          },
+          "description": "All six are renderable. A component that can only draw the happy path is unfinished."
+        },
+        "emits": {
+          "type": "array",
+          "items": { "enum": ["surface.action", "approval.decided", "resolution.answered"] },
+          "description": "Actions route upward. No component invokes, fetches, listens, routes a provider, or decides policy."
+        },
+        "resolvesFromStore": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Fields the component resolves live rather than trusting the agent's serialized value. ServiceRow resolves status this way: an asserted status is stale the moment it was serialized."
+        },
+        "a11y": {
+          "type": "object",
+          "description": "The component-specific requirements that a generic pass misses.",
+          "properties": {
+            "role": { "type": "string" },
+            "keyboard": { "type": "string" },
+            "liveRegion": { "enum": ["off", "polite", "assertive"] },
+            "textSummaryRequired": {
+              "type": "boolean",
+              "description": "True where the visual encoding is invisible to a screen reader, e.g. MetricSpark's bar row."
+            }
+          }
+        },
+        "emittedForVerdict": {
+          "enum": ["ambiguous", "underspecified", "low_confidence", "any"],
+          "description": "Resolution group only."
+        }
+      }
+    }
+  }
+}

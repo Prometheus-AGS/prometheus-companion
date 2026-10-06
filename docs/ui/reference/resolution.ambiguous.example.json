@@ -1,0 +1,65 @@
+{
+  "resolutionId": "rs-4471-02",
+  "runId": "r-9190",
+  "prompt": {
+    "hash": "sha256:9f2c81a4d0e7b3115ac4e0d21f88b6a0c73e5d19",
+    "text": "reindex",
+    "normalized": "reindex",
+    "glossaryVersion": 4
+  },
+  "verdict": "ambiguous",
+  "thresholds": {
+    "version": 3,
+    "tauFloor": 0.2,
+    "tauLow": 0.45,
+    "tauHigh": 0.72,
+    "delta": 0.15
+  },
+  "candidates": [
+    {
+      "capability": "skills.reindex",
+      "confidence": 0.64,
+      "components": {
+        "retrieval": 0.81,
+        "paramCompleteness": 1.0,
+        "priorAcceptRate": 0.42,
+        "personaAffinity": 1.0,
+        "blastPenalty": 0.05
+      },
+      "evidence": [
+        { "kind": "trigger", "value": "reindex", "span": [0, 7] },
+        { "kind": "example", "value": "reindex the skill pack" }
+      ],
+      "boundParams": {},
+      "unboundRequired": []
+    },
+    {
+      "capability": "rag.reindex",
+      "confidence": 0.58,
+      "components": {
+        "retrieval": 0.76,
+        "paramCompleteness": 1.0,
+        "priorAcceptRate": 0.18,
+        "personaAffinity": 1.0,
+        "blastPenalty": 0.05
+      },
+      "evidence": [
+        { "kind": "trigger", "value": "reindex", "span": [0, 7] },
+        { "kind": "glossary", "value": "reindex → rebuild vector index (glossary@4)" }
+      ],
+      "boundParams": {},
+      "unboundRequired": []
+    }
+  ],
+  "trace": [
+    { "step": "01", "stage": "normalize", "text": "prompt normalized · glossary@4 · no entity mentions found" },
+    { "step": "02", "stage": "retrieve", "text": "bm25 + vector(384) → 8 candidates · rrf fused · 0 removed by negative trigger" },
+    { "step": "03", "stage": "score", "text": "top1 skills.reindex 0.64 · top2 rag.reindex 0.58 · margin 0.06" },
+    { "step": "04", "stage": "verdict", "text": "margin 0.06 < DELTA 0.15 → ambiguous · 2 candidates within DELTA", "warn": true },
+    { "step": "05", "stage": "verdict", "text": "emitted CandidateChoice · task state input-required · ttl 15m" }
+  ],
+  "state": "open",
+  "createdAt": "2026-08-20T10:22:41Z",
+  "expiresAt": "2026-08-20T10:37:41Z",
+  "round": 1
+}

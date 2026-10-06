@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prometheusags.ai/companion/schemas/resolution-trace.schema.json",
+  "title": "Resolution, Trace, and RunPlan",
+  "description": "The resolver's output. Deterministic given the same manifest and thresholds. The resolver plans; UAR executes.",
+  "type": "object",
+  "required": ["resolutionId", "prompt", "verdict", "thresholds", "candidates", "trace"],
+  "additionalProperties": false,
+  "properties": {
+    "resolutionId": { "type": "string" },
+    "runId": { "type": "string" },
+    "prompt": {
+      "type": "object",
+      "required": ["hash"],
+      "description": "The text is stored only if the operator opted in; the hash always is.",
+      "properties": {
+        "hash": { "type": "string" },
+        "text": { "type": "string" },
+        "normalized": { "type": "string" },
+        "glossaryVersion": { "type": "integer" }
+      }
+    },
+    "verdict": {
+      "enum": ["no_task", "low_confidence", "ambiguous", "underspecified", "resolved"],
+      "description": "Evaluated in order, first match wins."
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "The constants in force, recorded because a threshold change invalidates prior feedback. A model never chooses one and feedback never moves one.",
+      "required": ["version", "tauFloor", "tauLow", "tauHigh", "delta"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "tauFloor": { "type": "number", "default": 0.2 },
+        "tauLow": { "type": "number", "default": 0.45 },
+        "tauHigh": { "type": "number", "default": 0.72 },
+        "delta": { "type": "number", "default": 0.15 }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "description": "Fixed at emission. Answering a CandidateChoice must NOT re-run retrieval — a different set would make the operator's choice a lie.",
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "trace": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/traceStep" }
+    },
+    "plan": { "$ref": "#/$defs/runPlan" },
+    "state": {
+      "enum": ["open", "answered", "expired", "cancelled"],
+      "description": "Single-use. An answer against an answered or expired resolution yields resolution.stale and never re-runs."
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "round": {
+      "type": "integer",
+      "maximum": 2,
+      "description": "Two rounds maximum. A third clarification becomes no_task with an honest explanation."
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "required": ["capability", "confidence", "components", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "capability": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "components": {
+          "type": "object",
+          "description": "The scored terms, so a disagreement can be traced to a term rather than a number.",
+          "required": ["retrieval", "paramCompleteness", "priorAcceptRate", "personaAffinity", "blastPenalty"],
+          "properties": {
+            "retrieval": { "type": "number" },
+            "paramCompleteness": { "type": "number" },
+            "priorAcceptRate": { "type": "number" },
+            "personaAffinity": { "type": "number" },
+            "blastPenalty": { "type": "number" }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "description": "What matched, and where. A candidate list without evidence is a guess wearing a number.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "value"],
+            "properties": {
+              "kind": { "enum": ["trigger", "glossary", "retrieval-span", "example", "entity"] },
+              "value": { "type": "string" },
+              "span": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        },
+        "boundParams": { "type": "object" },
+        "unboundRequired": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "traceStep": {
+      "type": "object",
+      "required": ["step", "stage", "text"],
+      "properties": {
+        "step": { "type": "string" },
+        "stage": { "enum": ["normalize", "retrieve", "score", "verdict", "plan"] },
+        "text": { "type": "string" },
+        "warn": { "type": "boolean" }
+      }
+    },
+    "runPlan": {
+      "type": "object",
+      "description": "The resolver's terminal output. It goes to the gateway, which authorizes it. The plan is not permission.",
+      "required": ["planId", "capability", "params", "effectClass", "gate", "confidence", "idempotencyKey"],
+      "additionalProperties": false,
+      "properties": {
+        "planId": { "type": "string" },
+        "capability": { "type": "string" },
+        "params": { "type": "object" },
+        "effectClass": { "enum": ["read", "mutating", "privileged"] },
+        "gate": {
+          "type": "string",
+          "description": "A resolved plan with effectClass privileged still passes its gate. Resolution confidence is not execution authority."
+        },
+        "confidence": { "type": "number" },
+        "resolvedVia": { "type": "array", "items": { "type": "string" } },
+        "idempotencyKey": { "type": "string" }
+      }
+    }
+  }
+}

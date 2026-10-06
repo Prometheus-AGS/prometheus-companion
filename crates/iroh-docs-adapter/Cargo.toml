@@ -1,0 +1,38 @@
+[package]
+name = "iroh-docs-adapter"
+description = "The iroh-docs backend for the skill pack's StorageProvider trait — P2P-backed document storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "iroh_docs_adapter"
+path = "src/lib.rs"
+
+[dependencies]
+# The trait this implements stays in the pack (change-cpc-004 moved only this
+# P2P-backed implementation). Default features are off: the pack's own
+# `iroh-docs-backend` feature would pull a second copy of the iroh stack.
+storage-provider = { workspace = true }
+
+# Versions match what storage-provider used at the source commit; the iroh floor
+# is 1.0.2 because that release fixed a relay DoS in which one malformed
+# datagram from any client took down an entire relay.
+iroh = "1.0.2"
+iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
+iroh-docs = { version = "0.101", default-features = false, features = ["fs-store"] }
+iroh-gossip = { version = "0.101", default-features = false, features = ["net"] }
+n0-future = "0.3.1"
+
+async-trait = "0.1"
+futures = "0.3"
+# Used by apply_json/CrdtEngine; inherited from storage-provider when this was
+# a module there.
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
