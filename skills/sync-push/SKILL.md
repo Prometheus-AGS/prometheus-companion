@@ -21,8 +21,8 @@ successful peer application.
 1. Confirm the requested domain, project/signer and selected host. Use
    `sync-status`/`sync-peers` for actual transport observations. Never push
    local-only surreal-memory, arbitrary credentials or unspecified project data.
-2. Call MCP `sync-push` with `{ "domain": "kbd-control:<project-id>" }` or the
-   explicit syncable domain. Generic domains require exactly one registered
+2. For project history, call MCP `sync-push` with `{ "domain": "kbd-control:<project-id>", "target_endpoint_ids": ["<paired-endpoint-id>"] }`. The MCP client can select a single explicitly configured bootstrap endpoint when targets are omitted. With multiple possible destinations, select the intended peers. A fresh signed project push over HTTP must already name its recipients when P2P is enabled.
+   Generic domains require exactly one registered
    project for signer selection. Ambiguity or unavailable key access is an
    error, not permission to create another signer.
 3. Retain `requestId`, exact `signedRequest`, endpoint, `intentPath`, HTTP status

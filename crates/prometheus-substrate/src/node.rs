@@ -164,12 +164,8 @@ pub async fn spawn_with_config(
                 identity, config.peers, config.discovery, transport.clone(),
             ));
         match started {
-            Ok((supervisor, mut incoming)) => {
-                let consumer = tokio::spawn(async move {
-                    while let Some(message) = incoming.recv().await {
-                        rest_api::handle_incoming_message(&state, &message.payload).await;
-                    }
-                });
+            Ok((supervisor, incoming)) => {
+                let consumer = tokio::spawn(sovereign_sync::consume_peer_messages(state, incoming));
                 (Some(supervisor), Some(consumer))
             },
             Err(error) => {

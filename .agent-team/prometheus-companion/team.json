@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "id": "prometheus-companion",
+  "scope": "project",
+  "harness": "claude",
+  "outcome": "Deliver Companion desktop and headless features with verified local behavior, peer boundaries and independent review.",
+  "roles": [
+    {
+      "id": "companion-lead",
+      "description": "Coordinate Companion work through the project’s KBD state and OpenSpec changes.",
+      "prompt": "Translate a user outcome into a scoped Companion change, identify the affected production entry point, assign disjoint ownership, and record decisions and local evidence. Use the KBD runtime for current state and preserve registered change IDs. Distinguish the optional Companion control plane from the independently usable skill pack. Preserve existing authorization and workspace changes.",
+      "skills": [
+        "kbd-process-orchestrator",
+        "agent-team-manage"
+      ],
+      "owns": [
+        "openspec/**",
+        "docs/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "templates/rules/**",
+        ".agent-team/**"
+      ],
+      "inputs": [
+        "User outcome",
+        "Current KBD phase and OpenSpec artifacts"
+      ],
+      "outputs": [
+        "Scope, assignments and acceptance criteria",
+        "Decision and evidence references"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "companion-runtime",
+      "description": "Implement Companion services, device pairing and signed KBD replication.",
+      "prompt": "Own the headless service, peer transport, authority and replication crates. Changes that cross the desktop bridge require agreement on the interface with the desktop role. For replication, distinguish a local append from delivery to a separately paired process with its own journal. Use isolated identities for local integration and collect evidence at the adopted boundary.",
+      "skills": [
+        "prometheus-rust-workspace"
+      ],
+      "owns": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "scripts/install-companion-service.sh",
+        "shared/**"
+      ],
+      "inputs": [
+        "Agreed scope",
+        "Protocol and ownership contract"
+      ],
+      "outputs": [
+        "Service implementation",
+        "Local process-boundary evidence"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "companion-desktop",
+      "description": "Implement the Tauri desktop shell, tray and frontend.",
+      "prompt": "Own the Tauri shell and React surface, including permissions, tray state and the bridge to the service. Use the established project design and accessibility rules on UI changes. Coordinate any change to a shared service interface with the runtime role before editing.",
+      "skills": [
+        "prometheus-ui-ux",
+        "prometheus-rust-workspace"
+      ],
+      "owns": [
+        "src/**",
+        "src-tauri/**",
+        "public/**",
+        "index.html",
+        "package.json",
+        "pnpm-lock.yaml",
+        "vite.config.ts",
+        "tsconfig*.json"
+      ],
+      "inputs": [
+        "Agreed scope",
+        "Service interface and user task"
+      ],
+      "outputs": [
+        "Desktop implementation",
+        "Evidence for the affected user surface"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "artifact-critic",
+      "description": "Independent final review of the delivered artifact and its verification evidence.",
+      "prompt": "Use a fresh context and inspect only the supplied artifact, acceptance criteria and local evidence. Follow the independent review procedure in .claude/agents/artifact-critic.md. Review after all scoped production changes are complete. Return findings with locations and user impact; the lead records findings. Restrict UI review to tasks with a user interface. Apply no production edits.",
+      "skills": [
+        "prometheus-ui-review"
+      ],
+      "owns": [
+        ".review/companion/**"
+      ],
+      "inputs": [
+        "Complete scoped artifact",
+        "Acceptance criteria and local evidence"
+      ],
+      "outputs": [
+        "Independent findings or evidence-backed clean review"
+      ],
+      "dependsOn": []
+    }
+  ]
+}

@@ -50,10 +50,14 @@ use tracing::{info, warn};
 use crate::ag_ui::{ag_ui_events, ag_ui_ping, ag_ui_stream, AgUiEvent, AgUiState};
 use crate::domains::{self, DomainAdapter, LearnerModelAdapter, SkillIndexAdapter, SyncEnvelope};
 use crate::kbd_control::KbdProjectRouter;
-use crate::kbd_sync::{KbdAuthorityPayload, KbdPresenceDocument};
+use crate::kbd_sync::{
+    event_coordinate, KbdAuthorityPayload, KbdAuthorityTransfer, KbdPresence, KbdPresenceDocument,
+    KbdTransferAck, MAX_BATCH_EVENTS,
+};
 use crate::mcp_server::SkillIndex;
 use crate::p2p::{
     P2PHandle, P2PHandleError, P2PHandleErrorKind, P2PNode, P2PStatusSnapshot, P2PTransportState,
+    MAX_PEER_FRAME_SIZE,
 };
 
 // ---------------------------------------------------------------------------
@@ -176,6 +180,17 @@ impl AppP2PTransport {
                     },
                 )
             }
+        }
+    }
+
+    async fn request_peer(
+        &self,
+        target: &str,
+        payload: Bytes,
+    ) -> Result<crate::p2p::PeerDelivery, P2PHandleError> {
+        match self {
+            Self::Supervised(handle) => handle.request_peer(target, payload).await,
+            _ => Err(P2PHandleError::unavailable(self.status().await.1)),
         }
     }
 
@@ -621,12 +636,15 @@ impl AppState {
             .cloned()
     }
 
-    fn presence_for(&self, project_id: &str) -> Option<Arc<KbdPresenceDocument>> {
+    fn presence_for(&self, project_id: &str) -> Arc<KbdPresenceDocument> {
+        // Callers have already resolved the project route. Registration can
+        // happen after startup, so create its presence document on first use.
         self.presence
-            .read()
+            .write()
             .expect("presence map lock poisoned")
-            .get(project_id)
-            .cloned()
+            .entry(project_id.to_owned())
+            .or_insert_with(|| Arc::new(KbdPresenceDocument::new(project_id.to_owned())))
+            .clone()
     }
 }
 
@@ -911,11 +929,19 @@ pub struct SignedSyncPushRequest {
 
 impl SignedSyncPushRequest {
     pub fn new_local(domain: impl Into<String>, signer: &kbd_runtime::DeviceSigner) -> Self {
+        Self::new_targeted(domain, Vec::new(), signer)
+    }
+
+    pub fn new_targeted(
+        domain: impl Into<String>,
+        target_endpoint_ids: Vec<String>,
+        signer: &kbd_runtime::DeviceSigner,
+    ) -> Self {
         let mut request = Self {
             schema_version: "1.7".into(),
             request_id: uuid::Uuid::new_v4().to_string(),
             domain: domain.into(),
-            target_endpoint_ids: Vec::new(),
+            target_endpoint_ids,
             expected_frontier: None,
             issued_at_ms: current_time_ms(),
             signer_key_id: signer.key_id().to_string(),
@@ -981,6 +1007,16 @@ pub struct PeerPushReceipt {
     pub updated_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_frame_bytes: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_events: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_frontier: Option<BTreeMap<String, u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_current: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1031,6 +1067,11 @@ impl PushReceipt {
                             state: "pending".into(),
                             updated_at_ms: now,
                             failure: None,
+                            accepted_frame_bytes: Vec::new(),
+                            inserted_events: None,
+                            receiver_frontier: None,
+                            projection_current: None,
+                            projection_error: None,
                         },
                     )
                 })
@@ -1062,6 +1103,7 @@ impl PushReceipt {
 struct ReceiptLedger {
     directory: Arc<PathBuf>,
     receipts: Arc<AsyncRwLock<BTreeMap<String, PushReceipt>>>,
+    execution: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ReceiptLedger {
@@ -1076,12 +1118,19 @@ impl ReceiptLedger {
             {
                 continue;
             }
-            let receipt: PushReceipt = serde_json::from_reader(File::open(path)?)?;
+            let mut receipt: PushReceipt = serde_json::from_reader(File::open(path)?)?;
+            if matches!(receipt.local_state, PushLocalState::Accepted | PushLocalState::Prepared) {
+                let detail = "sender restarted before final delivery was recorded".to_string();
+                receipt.failure = Some(detail.clone());
+                receipt.transition(PushLocalState::Failed, "sender_interrupted", Some(detail));
+                persist_receipt(&directory, &receipt)?;
+            }
             receipts.insert(receipt.push_id.clone(), receipt);
         }
         Ok(Self {
             directory: Arc::new(directory),
             receipts: Arc::new(AsyncRwLock::new(receipts)),
+            execution: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -1210,6 +1259,14 @@ pub async fn build_push_envelope(
     state: &AppState,
     domain_name: &str,
 ) -> Result<PushOutcome, (StatusCode, serde_json::Value)> {
+    build_targeted_push_envelope(state, domain_name, &[]).await
+}
+
+async fn build_targeted_push_envelope(
+    state: &AppState,
+    domain_name: &str,
+    targets: &[String],
+) -> Result<PushOutcome, (StatusCode, serde_json::Value)> {
     let domain = SyncDomain::new(domain_name.to_string());
     let syncable = {
         let mut manifest = state.manifest.write().await;
@@ -1229,7 +1286,7 @@ pub async fn build_push_envelope(
     let family = domains::domain_family(&domain).to_string();
 
     if family == "kbd-control" {
-        return build_kbd_authority_push_envelope(state, domain_name).await;
+        return build_kbd_authority_push_envelope(state, domain_name, targets).await;
     }
 
     let adapter = state.adapters.get(&family).ok_or_else(|| {
@@ -1284,7 +1341,7 @@ pub async fn build_push_envelope(
             domain: domain_name.to_string(),
             identity,
             payload: delta,
-            target_endpoint_ids: Vec::new(),
+            target_endpoint_ids: targets.to_vec(),
             signer_key_id: None,
             signature: None,
         },
@@ -1298,6 +1355,7 @@ pub async fn build_push_envelope(
 async fn build_kbd_authority_push_envelope(
     state: &AppState,
     domain_name: &str,
+    targets: &[String],
 ) -> Result<PushOutcome, (StatusCode, serde_json::Value)> {
     let project_id = domain_name
         .strip_prefix("kbd-control:")
@@ -1330,12 +1388,7 @@ async fn build_kbd_authority_push_envelope(
         session: "daemon".to_string(),
         observed_revision: status.revision,
     };
-    let presence_document = state.presence_for(project_id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            serde_json::json!({"error":"project presence document is unavailable"}),
-        )
-    })?;
+    let presence_document = state.presence_for(project_id);
     presence_document.update(&presence).map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1368,18 +1421,23 @@ async fn build_kbd_authority_push_envelope(
         });
     }
 
-    let signer = control.runtime().device_signer().map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({"error": error.to_string()}),
-        )
-    })?;
+    let signer = control
+        .enrolled_sync_signer(&status)
+        .await
+        .map_err(|error| {
+            let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            (code, serde_json::json!({"error": error.to_string()}))
+        })?;
     let mut envelope = SyncEnvelope {
         schema_version: "2".into(),
         domain: domain_name.to_string(),
         identity: Some(status.project_id),
         payload,
-        target_endpoint_ids: Vec::new(),
+        target_endpoint_ids: targets.to_vec(),
         signer_key_id: None,
         signature: None,
     };
@@ -1402,6 +1460,14 @@ async fn sync_push(
             StatusCode::FORBIDDEN,
             "v1_transport_forbidden",
             "the deprecated unsigned v1 push is available only over the same-user Unix socket",
+            None,
+        );
+    }
+    if state.p2p.enabled() && body.domain.starts_with("kbd-control:") {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "project_targets_required",
+            "use a signed /api/v2/sync/pushes request naming the paired project recipients",
             None,
         );
     }
@@ -1494,6 +1560,7 @@ fn api_error(
 async fn verify_sync_push_signature(
     state: &AppState,
     request: &SignedSyncPushRequest,
+    replaying_receipt: bool,
 ) -> Result<(), Response> {
     let canonical = request.canonical_payload().map_err(|error| {
         api_error(
@@ -1520,7 +1587,7 @@ async fn verify_sync_push_signature(
             continue;
         };
         if let Some(device) = status.devices.get(&request.signer_key_id) {
-            if device.status != kbd_runtime::DeviceStatus::Active {
+            if !replaying_receipt && device.status != kbd_runtime::DeviceStatus::Active {
                 return Err(api_error(
                     StatusCode::FORBIDDEN,
                     "signer_revoked",
@@ -1647,6 +1714,187 @@ async fn enforce_expected_frontier(
     Ok(())
 }
 
+fn encode_addressed_transfer(
+    project_id: &str,
+    target: &str,
+    signer: &kbd_runtime::DeviceSigner,
+    transfer: &KbdAuthorityTransfer,
+) -> anyhow::Result<Bytes> {
+    let mut envelope = SyncEnvelope {
+        schema_version: "3".into(),
+        domain: format!("kbd-control:{project_id}"),
+        identity: Some(project_id.into()),
+        payload: serde_json::to_vec(transfer)?,
+        target_endpoint_ids: vec![target.into()],
+        signer_key_id: None,
+        signature: None,
+    };
+    envelope.sign(signer);
+    Ok(serde_json::to_vec(&envelope)?.into())
+}
+
+async fn request_kbd_transfer(
+    state: &AppState,
+    target: &str,
+    encoded: Bytes,
+    peer: &mut PeerPushReceipt,
+) -> anyhow::Result<KbdTransferAck> {
+    let delivery = state.p2p.request_peer(target, encoded).await?;
+    let response = delivery
+        .response
+        .map_err(|error| anyhow::anyhow!("receiver rejected transfer: {error}"))?;
+    let ack: KbdTransferAck = serde_json::from_slice(&response)?;
+    peer.accepted_frame_bytes.push(delivery.frame_bytes);
+    peer.inserted_events = Some(peer.inserted_events.unwrap_or_default() + ack.inserted_events);
+    peer.receiver_frontier = Some(ack.projection.frontier.0.clone());
+    peer.projection_current = Some(ack.projection.current);
+    peer.projection_error = ack.projection.error.clone();
+    Ok(ack)
+}
+
+async fn catch_up_kbd_peer(
+    state: &AppState,
+    target: &str,
+    authority: &kbd_runtime::KbdStateV2,
+    events: &[kbd_runtime::Event],
+    signer: &kbd_runtime::DeviceSigner,
+    presence: Vec<KbdPresence>,
+    peer: &mut PeerPushReceipt,
+) -> anyhow::Result<()> {
+    let project_id = &authority.project_id;
+    let mut ack = request_kbd_transfer(
+        state,
+        target,
+        encode_addressed_transfer(
+            project_id,
+            target,
+            signer,
+            &KbdAuthorityTransfer::Probe { presence },
+        )?,
+        peer,
+    )
+    .await?;
+    let source_genesis = events.first().map(|event| event.integrity_hash.as_str());
+    anyhow::ensure!(
+        !ack.heads.is_empty() && Some(ack.genesis_hash.as_str()) == source_genesis,
+        "receiver has no matching signed project baseline"
+    );
+    let mut verified = BTreeMap::new();
+    for event in events {
+        let (replica, counter) = event_coordinate(event);
+        if let Some(head) = ack.heads.get(replica).filter(|head| head.lamport == counter) {
+            anyhow::ensure!(
+                head.integrity_hash == event.integrity_hash && head.event_id == event.event_id,
+                "receiver's signed history conflicts at replica {replica} position {counter}"
+            );
+            verified.insert(replica, counter);
+        }
+    }
+    // If a replica at B is ahead of the sender, its tip cannot be verified
+    // locally. Resend the corresponding source events for B to compare and
+    // deduplicate under the same authority lock as new events.
+    let pending: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            let (replica, counter) = event_coordinate(event);
+            counter > verified.get(replica).copied().unwrap_or_default()
+        })
+        .collect();
+
+    let mut remaining = pending.as_slice();
+    while !remaining.is_empty() {
+        let mut count = remaining.len().min(MAX_BATCH_EVENTS);
+        let encoded = loop {
+            let transfer = KbdAuthorityTransfer::apply(&remaining[..count])?;
+            let encoded = encode_addressed_transfer(project_id, target, signer, &transfer)?;
+            // Byte-array JSON costs at most four bytes per inner byte.
+            // Reserve room for the signed outer frame fields. The P2P
+            // sender and receiver also enforce the measured encoded size.
+            if encoded.len() <= (MAX_PEER_FRAME_SIZE - 1024) / 4 {
+                break encoded;
+            }
+            anyhow::ensure!(count > 1, "single signed event exceeds the peer frame budget");
+            count /= 2;
+        };
+        ack = request_kbd_transfer(state, target, encoded, peer).await?;
+        remaining = &remaining[count..];
+    }
+    anyhow::ensure!(
+        authority.replica_heads.iter().all(|(replica, expected)| {
+            ack.heads.get(replica).is_some_and(|received| {
+                received == expected || received.lamport > expected.lamport
+            })
+        }),
+        "receiver did not acknowledge the complete signed history"
+    );
+    Ok(())
+}
+
+async fn push_kbd_authority(
+    state: &AppState,
+    request: &SignedSyncPushRequest,
+    receipt: &mut PushReceipt,
+) -> anyhow::Result<()> {
+    let project_id = request
+        .domain
+        .strip_prefix("kbd-control:")
+        .ok_or_else(|| anyhow::anyhow!("KBD push requires a project domain"))?;
+    let control = state.kbd_projects.control(project_id)?;
+    let events = control.events_async(0).await?;
+    let (authority, events) = tokio::task::spawn_blocking(move || {
+        let authority = kbd_runtime::project_document::fold_project_events(&events)?;
+        Ok::<_, kbd_runtime::RuntimeError>((authority, events))
+    })
+    .await??;
+    anyhow::ensure!(
+        authority.project_id == project_id && authority.revision > 0,
+        "project has no signed history"
+    );
+    let signer = control.enrolled_sync_signer(&authority).await?;
+    // Ensure the request signer still has authority in the prepared source.
+    anyhow::ensure!(
+        authority
+            .devices
+            .get(&request.signer_key_id)
+            .is_some_and(|device| device.status == kbd_runtime::DeviceStatus::Active),
+        "request signer is no longer an active project device"
+    );
+    let presence = state.presence_for(project_id);
+    presence.update(&KbdPresence {
+        device: device_identity(),
+        harness: "sovereign-sync".into(),
+        session: "daemon".into(),
+        observed_revision: authority.revision,
+    })?;
+    let entries = presence.entries()?;
+    let mut delivery_error = None;
+    for target in &request.target_endpoint_ids {
+        let peer = receipt.per_peer.get_mut(target).ok_or_else(|| {
+            anyhow::anyhow!("target {target} is missing from the persisted receipt")
+        })?;
+        let delivery = catch_up_kbd_peer(
+            state,
+            target,
+            &authority,
+            &events,
+            &signer,
+            entries.clone(),
+            peer,
+        )
+        .await;
+        peer.updated_at_ms = current_time_ms();
+        match delivery {
+            Ok(()) => peer.state = "applied".into(),
+            Err(error) => {
+                peer.state = "failed".into();
+                peer.failure = Some(error.to_string());
+                delivery_error = Some(error);
+            }
+        }
+    }
+    delivery_error.map_or(Ok(()), Err)
+}
+
 /// Shared signed-push service used by REST and MCP. A same-ID/same-hash retry
 /// returns the persisted receipt exactly; a same-ID/different-hash request is
 /// a conflict and never re-executes local preparation or network delivery.
@@ -1654,6 +1902,27 @@ pub async fn execute_signed_sync_push(
     state: &AppState,
     request: SignedSyncPushRequest,
 ) -> Result<(StatusCode, PushReceipt), Response> {
+    // A disconnected HTTP client cannot cancel already admitted work. The
+    // ledger serializes replays until that first request reaches a terminal
+    // receipt, so overlapping identical POSTs also return the same result.
+    let state = state.clone();
+    tokio::spawn(async move { execute_signed_sync_push_once(&state, request).await })
+        .await
+        .map_err(|error| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "push_worker_failed",
+                error.to_string(),
+                None,
+            )
+        })?
+}
+
+async fn execute_signed_sync_push_once(
+    state: &AppState,
+    request: SignedSyncPushRequest,
+) -> Result<(StatusCode, PushReceipt), Response> {
+    let _execution = state.receipts.execution.lock().await;
     let hash = request.payload_hash().map_err(|error| {
         api_error(
             StatusCode::BAD_REQUEST,
@@ -1663,15 +1932,28 @@ pub async fn execute_signed_sync_push(
         )
     })?;
     validate_sync_push_request(&request).map_err(|response| *response)?;
-    verify_sync_push_signature(state, &request).await?;
-    if let Some(existing) = state.receipts.get(&request.request_id).await {
-        if existing.canonical_payload_hash == hash {
+    let existing = state.receipts.get(&request.request_id).await;
+    let replaying_receipt = existing
+        .as_ref()
+        .is_some_and(|receipt| receipt.canonical_payload_hash == hash);
+    verify_sync_push_signature(state, &request, replaying_receipt).await?;
+    if let Some(existing) = existing {
+        if replaying_receipt {
             return Ok((StatusCode::OK, existing));
         }
         return Err(api_error(
             StatusCode::CONFLICT,
             "request_id_conflict",
             "requestId already exists with a different canonical payload hash",
+            Some(&request.request_id),
+        ));
+    }
+    let private_project_push = request.domain.starts_with("kbd-control:");
+    if state.p2p.enabled() && private_project_push && request.target_endpoint_ids.is_empty() {
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "project_targets_required",
+            "a project history push requires explicit paired endpoint IDs",
             Some(&request.request_id),
         ));
     }
@@ -1702,28 +1984,54 @@ pub async fn execute_signed_sync_push(
             Some(&request.request_id),
         ));
     }
-    let outcome = match build_push_envelope(state, &request.domain).await {
-        Ok(outcome) => outcome,
-        Err((status, body)) => {
-            let detail = body.to_string();
-            receipt.failure = Some(detail.clone());
-            receipt.transition(PushLocalState::Failed, "failed", Some(detail.clone()));
-            let _ = state.receipts.save(receipt).await;
-            let mapped = match status {
-                StatusCode::NOT_FOUND => StatusCode::NOT_FOUND,
-                StatusCode::BAD_REQUEST => StatusCode::BAD_REQUEST,
-                StatusCode::CONFLICT => StatusCode::CONFLICT,
-                StatusCode::FORBIDDEN => StatusCode::FORBIDDEN,
-                _ => StatusCode::SERVICE_UNAVAILABLE,
-            };
-            return Err(api_error(
-                mapped,
-                "push_preparation_failed",
-                detail,
-                Some(&request.request_id),
-            ));
-        }
-    };
+    if private_project_push && state.p2p.enabled() {
+        receipt.transition(PushLocalState::Prepared, "prepared", None);
+        let delivery = push_kbd_authority(state, &request, &mut receipt).await;
+        let response_status = match delivery {
+            Ok(()) => {
+                receipt.transition(PushLocalState::Broadcast, "applied_at_targets", None);
+                StatusCode::CREATED
+            }
+            Err(error) => {
+                let detail = error.to_string();
+                receipt.failure = Some(detail.clone());
+                receipt.transition(PushLocalState::Failed, "target_delivery_failed", Some(detail));
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        };
+        state.receipts.save(receipt.clone()).await.map_err(|error| api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "receipt_store_unavailable",
+            error.to_string(),
+            Some(&request.request_id),
+        ))?;
+        return Ok((response_status, receipt));
+    }
+    let outcome =
+        match build_targeted_push_envelope(state, &request.domain, &request.target_endpoint_ids)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err((status, body)) => {
+                let detail = body.to_string();
+                receipt.failure = Some(detail.clone());
+                receipt.transition(PushLocalState::Failed, "failed", Some(detail.clone()));
+                let _ = state.receipts.save(receipt).await;
+                let mapped = match status {
+                    StatusCode::NOT_FOUND => StatusCode::NOT_FOUND,
+                    StatusCode::BAD_REQUEST => StatusCode::BAD_REQUEST,
+                    StatusCode::CONFLICT => StatusCode::CONFLICT,
+                    StatusCode::FORBIDDEN => StatusCode::FORBIDDEN,
+                    _ => StatusCode::SERVICE_UNAVAILABLE,
+                };
+                return Err(api_error(
+                    mapped,
+                    "push_preparation_failed",
+                    detail,
+                    Some(&request.request_id),
+                ));
+            }
+        };
     receipt.transition(PushLocalState::Prepared, "prepared", None);
     match outcome {
         PushOutcome::LocalOnly { snapshot_bytes } => {
@@ -1734,10 +2042,9 @@ pub async fn execute_signed_sync_push(
             );
         }
         PushOutcome::Broadcast {
-            mut envelope,
+            envelope,
             snapshot_bytes,
         } => {
-            envelope.target_endpoint_ids = request.target_endpoint_ids.clone();
             let encoded = serde_json::to_vec(&envelope).map_err(|error| {
                 api_error(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -1746,7 +2053,9 @@ pub async fn execute_signed_sync_push(
                     Some(&request.request_id),
                 )
             })?;
-            if let Err(error) = state.p2p.broadcast(Bytes::from(encoded)).await {
+            let encoded = Bytes::from(encoded);
+            let delivery = state.p2p.broadcast(encoded).await;
+            if let Err(error) = delivery {
                 let detail = error.to_string();
                 receipt.failure = Some(detail.clone());
                 receipt.transition(
@@ -2173,6 +2482,37 @@ async fn kbd_diagnostics(
     }
 }
 
+async fn kbd_refresh_projections(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    let control = match state.kbd_projects.control(&project_id) {
+        Ok(control) => control,
+        Err(error) => {
+            let status = if error.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::CONFLICT
+            };
+            return (status, Json(serde_json::json!({"error": error.to_string()}))).into_response();
+        }
+    };
+    match control.refresh_projections().await {
+        Ok(projection) => {
+            let status = if projection.current {
+                StatusCode::OK
+            } else {
+                StatusCode::CONFLICT
+            };
+            (status, Json(projection)).into_response()
+        }
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": error.to_string()})),
+        ).into_response(),
+    }
+}
+
 async fn kbd_conflicts(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<String>,
@@ -2233,12 +2573,14 @@ async fn kbd_command(
     let command_id = signed.command.command_id.clone();
     match control.submit_signed(signed).await {
         Ok(committed) => {
-            if let Ok(events) = control.events_async(0).await {
-                if let Some(event) = events
-                    .iter()
-                    .find(|event| event.command_id.as_deref() == Some(&command_id))
-                {
-                    publish_kbd_event(&state.ag_ui, event, &committed.result.state);
+            if !committed.result.duplicate {
+                if let Ok(events) = control.events_async(0).await {
+                    if let Some(event) = events
+                        .iter()
+                        .find(|event| event.command_id.as_deref() == Some(&command_id))
+                    {
+                        publish_kbd_event(&state.ag_ui, event, &committed.result.state);
+                    }
                 }
             }
             (StatusCode::OK, Json(serde_json::json!(committed))).into_response()
@@ -2454,7 +2796,7 @@ async fn kbd_event_stream(
         .unwrap_or(0);
     let events = stream::unfold((control, last_event_id), |(control, revision)| async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let fresh = control.events(revision).unwrap_or_default();
+        let fresh = control.events_async(revision).await.unwrap_or_default();
         let next_revision = revision.saturating_add(fresh.len() as u64);
         let payload = serde_json::to_string(&fresh).unwrap_or_else(|_| "[]".into());
         Some((
@@ -2577,13 +2919,30 @@ pub fn openapi_document() -> serde_json::Value {
                     "201": { "description": "Push created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PushReceipt" } } } },
                     "200": { "description": "Exact same-ID/same-hash receipt replay", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PushReceipt" } } } },
                     "400": error_response.clone(), "401": error_response.clone(), "403": error_response.clone(),
-                    "404": error_response.clone(), "409": error_response.clone(), "422": error_response.clone(), "503": error_response.clone()
+                    "404": error_response.clone(), "409": error_response.clone(), "422": error_response.clone(),
+                    "503": {
+                        "description": "Unavailable service or a durable failed addressed-delivery receipt",
+                        "content": { "application/json": { "schema": { "oneOf": [
+                            error_response["content"]["application/json"]["schema"].clone(),
+                            { "$ref": "#/components/schemas/PushReceipt" }
+                        ] } } }
+                    }
                 }
             }},
             "/api/v2/sync/pushes/{push_id}": { "get": {
                 "operationId": "getSyncPush",
                 "parameters": [{ "name": "push_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
                 "responses": { "200": { "description": "Durable push receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PushReceipt" } } } }, "404": error_response.clone() }
+            }},
+            "/api/v1/kbd/projects/{project_id}/projections/refresh": { "post": {
+                "operationId": "refreshKbdProjections",
+                "summary": "Regenerate the checkout projection from durable signed history",
+                "parameters": [{ "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+                "responses": {
+                    "200": { "description": "Checkout waypoint matches current authority" },
+                    "404": error_response.clone(),
+                    "409": { "description": "Checkout projection remains stale or authority is unavailable" }
+                }
             }},
             "/api/v2/sync/pushes/{push_id}/events": { "get": {
                 "operationId": "streamSyncPushEvents",
@@ -2682,6 +3041,10 @@ pub fn build_router(state: AppState) -> Router {
             get(kbd_diagnostics),
         )
         .route(
+            "/api/v1/kbd/projects/{project_id}/projections/refresh",
+            post(kbd_refresh_projections),
+        )
+        .route(
             "/api/v1/kbd/projects/{project_id}/conflicts",
             get(kbd_conflicts),
         )
@@ -2756,7 +3119,28 @@ pub async fn handle_incoming_message(state: &AppState, payload: &[u8]) {
     let family = domains::domain_family(&domain).to_string();
 
     if family == "kbd-control" {
-        return import_kbd_authority_message(state, &envelope).await;
+        if !envelope.target_endpoint_ids.is_empty() {
+            warn!("dropping addressed KBD history received over gossip");
+            return;
+        }
+        let result = match KbdAuthorityPayload::decode(&envelope.payload) {
+            Ok(payload) if Some(payload.project_id.as_str()) == envelope.identity.as_deref() => {
+                receive_kbd_authority(
+                    state,
+                    envelope,
+                    Some(payload.project_updates),
+                    payload.presence,
+                    false,
+                )
+                .await
+            }
+            Ok(_) => Err(anyhow::anyhow!("payload project does not match the signed envelope")),
+            Err(error) => Err(error.into()),
+        };
+        if let Err(error) = result {
+            warn!(%error, "rejecting KBD history received over gossip");
+        }
+        return;
     }
 
     // Public domains (skill-index) carry no meaningful identity scope.
@@ -2815,92 +3199,119 @@ pub async fn handle_incoming_message(state: &AppState, payload: &[u8]) {
     }
 }
 
-/// `kbd-control` receive: project-identity check first (cheap, coarse), then
-/// real peer authentication — the envelope's claimed `signer_key_id` must
-/// resolve to an `Active` device in this node's own (already-replicated)
-/// `KbdStateV2.devices`, and the signature must verify against that device's
-/// public key. `peer_authorized` is only true when both hold; `import_authenticated`
-/// enforces it again independently (defense in depth), so a bug here fails
-/// closed rather than open.
-async fn import_kbd_authority_message(state: &AppState, envelope: &SyncEnvelope) {
-    let Some(project_id) = envelope.identity.as_deref() else {
-        tracing::warn!("dropping kbd-control message — missing project identity");
-        return;
-    };
-    let Ok(control) = state.kbd_projects.control(project_id) else {
-        tracing::warn!("dropping kbd-control message — project is not registered");
-        return;
-    };
-    let Ok(status) = control.status_async().await else {
-        tracing::warn!("dropping kbd-control message — local runtime status unavailable");
-        return;
-    };
-    let local_identity = Some(status.project_id.clone());
-    if envelope.identity != local_identity {
-        tracing::warn!(
-            "dropping kbd-control message — project identity mismatch (local={:?}, remote={:?})",
-            local_identity,
-            envelope.identity
-        );
-        return;
+/// P2P has already authenticated and paired the remote endpoint on this
+/// private connection. The signed project envelope binds the history to its
+/// intended recipient and identifies an enrolled KBD device independently.
+pub async fn handle_incoming_peer_message(state: &AppState, endpoint_id: &str, bytes: &[u8]) {
+    if let Err(error) = apply_incoming_peer_message(state, endpoint_id, bytes).await {
+        warn!(%endpoint_id, %error, "rejecting addressed KBD history");
     }
+}
 
-    let peer_authorized = kbd_peer_is_authorized(&status.devices, envelope);
-    if !peer_authorized {
-        tracing::warn!("dropping kbd-control authority message — signer is not authorized");
-        return;
-    }
-
-    let payload = match KbdAuthorityPayload::decode(&envelope.payload) {
-        Ok(payload) if payload.project_id == project_id => payload,
-        Ok(payload) => {
-            tracing::warn!(
-                "dropping kbd-control authority message — payload project {} does not match {}",
-                payload.project_id,
-                project_id
+pub(crate) async fn apply_incoming_peer_message(
+    state: &AppState,
+    endpoint_id: &str,
+    bytes: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    let envelope: SyncEnvelope = serde_json::from_slice(bytes)?;
+    let (_, transport) = state.p2p.status().await;
+    anyhow::ensure!(
+        transport
+            .node_id
+            .as_ref()
+            .is_some_and(|id| envelope.target_endpoint_ids.contains(id)),
+        "KBD envelope from {endpoint_id} has no signed target for this endpoint"
+    );
+    let (updates, presence) = match envelope.schema_version.as_str() {
+        "3" => match serde_json::from_slice(&envelope.payload)? {
+            KbdAuthorityTransfer::Probe { presence } => (None, presence),
+            KbdAuthorityTransfer::Apply { updates } => (
+                Some(KbdAuthorityTransfer::decode_updates(&updates)?),
+                Vec::new(),
+            ),
+        },
+        "2" => {
+            let payload = KbdAuthorityPayload::decode(&envelope.payload)?;
+            anyhow::ensure!(
+                envelope.identity.as_deref() == Some(payload.project_id.as_str()),
+                "payload project does not match the signed envelope"
             );
-            return;
+            (Some(payload.project_updates), payload.presence)
         }
-        Err(error) => {
-            tracing::warn!("dropping invalid kbd-control authority payload: {error}");
-            return;
-        }
+        _ => anyhow::bail!("unsupported KBD transfer schema {}", envelope.schema_version),
     };
-    let before = control
-        .events_async(0)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|event| event.event_id)
-        .collect::<std::collections::HashSet<_>>();
-    let merged = match control
-        .import_project_updates(payload.project_updates)
-        .await
-    {
-        Ok((_, merged)) => merged,
-        Err(error) => {
-            tracing::warn!("dropping invalid kbd-control project updates: {error}");
-            return;
-        }
-    };
-    if let Ok(events) = control.events_async(0).await {
-        for event in events
-            .iter()
-            .filter(|event| !before.contains(&event.event_id))
-        {
-            publish_kbd_event(&state.ag_ui, event, &merged);
-        }
-    }
+    Ok(serde_json::to_vec(
+        &receive_kbd_authority(state, envelope, updates, presence, true).await?,
+    )?)
+}
 
-    let Some(presence) = state.presence_for(project_id) else {
-        tracing::warn!("dropping kbd-control message — presence document is unavailable");
-        return;
-    };
-    for entry in payload.presence {
+async fn receive_kbd_authority(
+    state: &AppState,
+    envelope: SyncEnvelope,
+    updates: Option<Vec<u8>>,
+    received_presence: Vec<KbdPresence>,
+    require_local_enrollment: bool,
+) -> anyhow::Result<KbdTransferAck> {
+    let project_id = envelope
+        .identity
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("missing KBD project identity"))?;
+    anyhow::ensure!(
+        envelope.domain.strip_prefix("kbd-control:") == Some(project_id.as_str()),
+        "KBD project does not match the signed domain"
+    );
+    let control = state
+        .kbd_projects
+        .control(&project_id)
+        .map_err(|error| anyhow::anyhow!("receiving KBD project is unavailable: {error}"))?;
+    let expected_project = project_id.clone();
+    let (inserted_events, merged, events, projection, genesis_hash) = control
+        .process_peer_update(updates, move |runtime, status| {
+            let deny = |detail| std::io::Error::new(std::io::ErrorKind::PermissionDenied, detail);
+            if status.project_id != expected_project || status.revision == 0 {
+                return Err(deny("receiver's signed project identity does not match"));
+            }
+            let Some(device) = envelope
+                .signer_key_id
+                .as_ref()
+                .and_then(|key| status.devices.get(key))
+            else {
+                return Err(deny("signer is not enrolled in the receiving project"));
+            };
+            if device.status != kbd_runtime::DeviceStatus::Active {
+                return Err(deny("signer is revoked in the receiving project"));
+            }
+            if !kbd_peer_is_authorized(&status.devices, &envelope) {
+                return Err(deny("receiving project rejected the authority signature"));
+            }
+            if require_local_enrollment {
+                let local = runtime.device_signer().map_err(std::io::Error::other)?;
+                if !status
+                    .devices
+                    .get(local.key_id())
+                    .is_some_and(|device| device.status == kbd_runtime::DeviceStatus::Active)
+                {
+                    return Err(deny("receiving device is not enrolled in this project"));
+                }
+            }
+            Ok(())
+        })
+        .await?;
+    for event in &events {
+        publish_kbd_event(&state.ag_ui, event, &merged);
+    }
+    let presence = state.presence_for(&project_id);
+    for entry in received_presence {
         if let Err(error) = presence.update(&entry) {
-            tracing::warn!("failed to merge kbd-control presence: {error}");
+            warn!(%error, "failed to merge KBD project presence");
         }
     }
+    Ok(KbdTransferAck {
+        genesis_hash,
+        heads: merged.replica_heads,
+        inserted_events,
+        projection,
+    })
 }
 
 /// The actual authorization decision, factored out as a pure function so it

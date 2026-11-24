@@ -16,6 +16,9 @@ pub struct NodeConfig {
 pub struct PeersConfig {
     #[serde(default)]
     pub bootstrap: Vec<String>,
+    /// Limit discovery and connections to this link; disable public relays and DHT.
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 /// Peer discovery (`change-cpc-006`).

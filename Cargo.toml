@@ -31,7 +31,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.97"
 license = "MIT"
@@ -39,13 +39,11 @@ authors = ["Travis James <tjames@prometheusags.ai>"]
 
 [workspace.dependencies]
 # --- prometheus-skill-pack, consumed by git rev (never by path) -------------
-# Exact full skill-system revision selected by the owner. Protected
-# versions.toml reconciliation and Cargo.lock generation remain release work;
-# this source pin alone does not establish compiled compatibility.
-kbd-runtime = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61" }
-storage-provider = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61", default-features = false }
-learner-model = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61" }
-prometheus-skill-index = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61" }
+# Full v1.17.0 supplies the signed co-operator event reader and standalone storage traits.
+kbd-runtime = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "acd029107533c07a661a7e3ad90eb28834688afa" }
+storage-provider = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "acd029107533c07a661a7e3ad90eb28834688afa", default-features = false }
+learner-model = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "acd029107533c07a661a7e3ad90eb28834688afa" }
+prometheus-skill-index = { git = "https://github.com/Prometheus-AGS/prometheus-skill-system", rev = "acd029107533c07a661a7e3ad90eb28834688afa" }
 
 # --- pinned in versions.toml ------------------------------------------------
 # keyring is EXACT: kbd-runtime pins `=3.6.3` and holds the device key as

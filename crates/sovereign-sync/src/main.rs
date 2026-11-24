@@ -20,6 +20,8 @@ enum Mode {
     PairExport,
     /// Import a pairing ticket and enroll its endpoint/signing-key binding
     PairImport,
+    /// Print a signed, addressed KBD request for POST /api/v2/sync/pushes
+    SignKbdPush,
     /// Print the generated OpenAPI 3.1 contract and exit
     Openapi,
 }
@@ -105,6 +107,11 @@ struct Cli {
 
     #[arg(long, help = "Pairing ticket for --mode pair-import")]
     ticket: Option<String>,
+    #[arg(long, help = "Registered project UUID for --mode sign-kbd-push")]
+    project_id: Option<uuid::Uuid>,
+
+    #[arg(long, help = "Recipient endpoint ID for --mode sign-kbd-push")]
+    peer: Option<iroh::EndpointId>,
 }
 
 async fn run_daemon_until_shutdown(
@@ -148,6 +155,7 @@ async fn run_daemon_until_shutdown(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("sovereign_sync=info".parse()?),
@@ -235,6 +243,23 @@ async fn main() -> anyhow::Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&rest_api::openapi_document())?
             );
+        }
+        Mode::SignKbdPush => {
+            let project_id = cli.project_id.ok_or_else(|| {
+                anyhow::anyhow!("--project-id is required for --mode sign-kbd-push")
+            })?;
+            let peer = cli
+                .peer
+                .ok_or_else(|| anyhow::anyhow!("--peer is required for --mode sign-kbd-push"))?;
+            let router = sovereign_sync::kbd_control::KbdProjectRouter::open_registered().await?;
+            let control = router.control(&project_id.to_string())?;
+            let signer = control.runtime().device_signer()?;
+            let request = rest_api::SignedSyncPushRequest::new_targeted(
+                format!("kbd-control:{project_id}"),
+                vec![peer.to_string()],
+                &signer,
+            );
+            println!("{}", serde_json::to_string(&request)?);
         }
         Mode::Mcp => {
             if cli.prefix_tools {
@@ -325,14 +350,8 @@ async fn main() -> anyhow::Result<()> {
                 cfg.discovery.clone(),
                 p2p_handle.clone(),
             ) {
-                Ok((supervisor, mut incoming)) => {
-                    let consumer_state = state.clone();
-                    let consumer = tokio::spawn(async move {
-                        while let Some(message) = incoming.recv().await {
-                            rest_api::handle_incoming_message(&consumer_state, &message.payload)
-                                .await;
-                        }
-                    });
+                Ok((supervisor, incoming)) => {
+                    let consumer = tokio::spawn(sovereign_sync::consume_peer_messages(state.clone(), incoming));
                     (Some(supervisor), Some(consumer))
                 }
                 Err(error) => {

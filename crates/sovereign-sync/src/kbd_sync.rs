@@ -1,11 +1,13 @@
 //! Signed authoritative KBD project synchronization.
 //!
-//! The wire payload carries the complete Loro update set for one persisted
-//! `project.loro` document plus optional ephemeral presence. Per-replica
-//! journals remain local write-ahead logs and are never transmitted.
+//! Addressed transfers use independent Loro updates containing batches of
+//! immutable signed events. Per-replica write-ahead journals stay local.
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use kbd_runtime::{Event, ReplicaHead};
 use loro::{ExportMode, LoroDoc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use storage_provider::{DomainConfig, PrivacyClass, SyncDomain, SyncManifest};
 
 use crate::error::SyncError;
@@ -24,6 +26,66 @@ pub fn trusted_manifest(project_id: &str) -> SyncManifest {
         ),
     );
     manifest
+}
+
+pub(crate) const MAX_BATCH_EVENTS: usize = 32;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum KbdAuthorityTransfer {
+    Probe { presence: Vec<KbdPresence> },
+    Apply { updates: String },
+}
+
+impl KbdAuthorityTransfer {
+    pub(crate) fn apply(events: &[&Event]) -> anyhow::Result<Self> {
+        // A regular op-range export can depend on Loro operations outside its
+        // range. The runtime validates each import with a fresh Loro document,
+        // so generate a self-contained update of its grow-only signed map.
+        let doc = LoroDoc::new();
+        let event_map = doc.get_map("events");
+        for event in events {
+            let canonical = serde_jcs::to_string(event)?;
+            event_map.insert(event.event_id.as_str(), canonical)?;
+        }
+        doc.commit();
+        let updates = doc.export(ExportMode::all_updates())?;
+        Ok(Self::Apply {
+            updates: STANDARD.encode(updates),
+        })
+    }
+
+    pub(crate) fn decode_updates(updates: &str) -> anyhow::Result<Vec<u8>> {
+        Ok(STANDARD.decode(updates)?)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KbdTransferAck {
+    pub genesis_hash: String,
+    pub heads: BTreeMap<String, ReplicaHead>,
+    pub inserted_events: usize,
+    pub projection: KbdProjectionStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KbdProjectionStatus {
+    pub source_revision: u64,
+    pub frontier: kbd_runtime::CausalFrontier,
+    pub current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Coordinates from the runtime's verified per-replica chains.
+pub(crate) fn event_coordinate(event: &Event) -> (&str, u64) {
+    if event.replica_id.is_empty() {
+        ("legacy", event.revision)
+    } else {
+        (&event.replica_id, event.lamport)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 {
   "name": "prometheus-companion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minimumContractVersion": "1.0.0",
   "description": "The control and extension framework for prometheus-skill-pack: cross-machine CRDT sync, P2P discovery and pairing, and service supervision. Ships the sync-status, sync-peers, and sync-push skills as its own connected skill package — the first extension registered through integration contract seam 4.",
   "skills": "skills/",
