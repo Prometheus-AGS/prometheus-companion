@@ -1,88 +1,49 @@
 # Prometheus Companion
 
-Prometheus Companion is an optional host for the Prometheus skill pack's control
-plane, peer synchronization and service supervision. The pack retains its local
-signed KBD authority, services and skills and operates without Companion.
-Dependencies flow from Companion to the pack.
+Two KBD sessions can work against the same local project using the Full skill pack alone. Run Companion when a session needs a control socket, a separately paired copy of the project's signed history, or a supervisor for the services in an installed pack. Each Companion process owns its own local authority. A signed push delivers work to a recipient whose endpoint and project membership have both been authorized.
 
-This checkout is a source candidate. Compilation, local integration, approved
-release pins, installation and functional acceptance remain separate gates. Its
-initial `origin/main` is a private local staging mirror; no published remote or
-release artifact is implied.
+## Choose how to work
 
-## Current scope
+| What you need | Entry point |
+|---|---|
+| One local KBD authority shared by sessions | Use the Full pack CLI in the registered checkout. The pack can keep working while Companion is stopped. |
+| One process serving local clients | Run `prometheus-companion-headless` with an enrolled device key. Clients select its Unix socket. The Tauri app and `sovereign-sync --mode daemon` can also own a socket. Start one owner per socket. |
+| Work shared between two separately running authorities | Pair the two endpoints and enroll the device identities in the project. Send an addressed push and read the event back from the receiver. [Signed transfer walkthrough](docs/control-api.md#send-project-history-to-one-paired-peer) |
+| Connected sync tools in Claude Code | Register the three connected skills with the skill-package installer and point the MCP process at the selected host. [Installer previews and ownership](docs/installation.md) |
+| Troubleshooting, upgrades or rollback | Compare the receiver's signed audit and frontier with the sender's, retain the original request ID and preserve the enrolled keys. [Operations and recovery](docs/maintenance.md) |
 
-| Surface | Implemented source | Limit |
-|---|---|---|
-| `prometheus-companion-headless` | Same-user Unix control socket, signed KBD routes, optional configured P2P, service supervision | Requires an existing unattended signing key; macOS launchd adoption |
-| Tauri shell | Hosts the same node; five service-health tray states | Window still contains the starter greeting screen; no dashboard, pairing screen or tray action menus |
-| `sovereign-sync` | Stdio MCP bridge, standalone daemon/server, status, pairing CLI, OpenAPI | One selected control host per socket; server mode has no P2P |
-| `sovereign-client` | REST/SSE SDK, Unix client, signed v2 push and receipt lookup | Caller must retain request identity and distinguish receipt states |
-| Connected skills | `sync-status`, `sync-peers`, `sync-push` through the selected host | Require a running host; MCP registration alone does not start one |
-| `kbd-mobile`, `iroh-docs-adapter` | Relocated embedded replica and P2P storage source | No supported mobile application or newly certified storage deployment |
+## Read a local project without Companion
 
-The node installs local authority before starting its P2P supervisor. Disabled,
-failed or retrying transport remains visible separately from local readiness.
-Incoming authenticated frames enter the same production control and CRDT
-handlers as the standalone daemon. Service reports come from the selected
-pack's `shared/services.manifest.json`; an empty list cannot establish health.
-
-## Build and install
-
-Use the repository's Rust workspace and pinned Node/pnpm frontend. The headless
-build targets are:
+From an already registered project, set `PROJECT_ROOT` to its absolute checkout path. With the Companion socket absent, the Full pack CLI can read local signed state. A second KBD session using the same local authority can observe the same writes.
 
 ```bash
-cargo build -p prometheus-substrate --no-default-features --features headless --bin prometheus-companion-headless
-cargo build -p sovereign-sync --bin sovereign-sync
+prometheus kbd --path "$PROJECT_ROOT" status --json
 ```
 
-These are operator instructions, not successful build evidence. During an active
-delivery phase, production work must finish before consolidated local gates run;
-only one Cargo/rustc build may run on the machine. Desktop packaging uses the
-Tauri frontend separately and is not required for headless deployment.
+Use a second, independently enrolled authority when the receiver needs its own persisted copy or separate checkout. The walkthrough below uses that setup.
 
-The four pack consumers in `Cargo.toml` select exactly
-`ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61` of
-`Prometheus-AGS/prometheus-skill-system`. `versions.toml` remains operator
-protected; the lockfile must be reconciled and compiled at the final gate before
-a reproducible release is claimed. Crate relocation commits are provenance,
-not the current dependency selection.
+## Build and connect
 
-[Installation](docs/installation.md) covers loading the headless LaunchAgent
-and registering the connected skills through Claude Code's user-scoped MCP CLI.
-Both installers offer a read-only `--dry-run`; neither builds a binary or grants
-identity enrollment.
-
-## Use and contracts
-
-Choose one host: headless, Tauri, or `sovereign-sync --mode daemon`. They share
-the socket contract and must not compete for it. `--mode server` serves local
-control with disabled P2P. Stdio MCP connects its sync tools to that selected
-host; it does not substitute an empty local transport for the host's status.
+From the Companion checkout, build the locked versions of the headless host and sync CLI.
 
 ```bash
-sovereign-sync --mode status --format json
+cargo build --locked -p prometheus-substrate --no-default-features --features headless --bin prometheus-companion-headless
+cargo build --locked -p sovereign-sync --bin sovereign-sync
 ```
 
-This reports liveness and latency, not peer convergence. `/ready`, transport
-status and signed command/push receipts answer different questions. See
-[control APIs](docs/control-api.md) for REST, MCP and signed v2 push recovery.
-[Installation](docs/installation.md) explains explicit private peer enrollment.
-Discovery supplies addresses for known endpoints; it grants no access.
+Set `SOVEREIGN_SYNC_SOCKET` to the Unix socket selected for your host. Once the host is running, these commands show whether the listener responds and whether its local authority is ready.
 
-## Support, maintenance and history
+```bash
+target/debug/sovereign-sync --mode status --format json --socket "$SOVEREIGN_SYNC_SOCKET"
+curl --fail --silent --show-error --unix-socket "$SOVEREIGN_SYNC_SOCKET" http://localhost/ready
+```
 
-[Maintenance](docs/maintenance.md) defines the finite platform/harness scope,
-update/rollback, identity/journal recovery, dependency maintenance and remaining
-acceptance requirements. Release ownership stays with the Prometheus repository
-owner. Report regressions with redacted artifact/source identities and the exact
-failed contract; never include keys or pairing tickets.
+Local readiness comes first. Peer discovery and service supervision start separately. Use the receiver's audit to check a transfer and the selected pack's service manifest to interpret a service report. [Control API](docs/control-api.md)
 
-The [architecture draft](docs/00-architecture-and-implementation-plan.md) and
-[UI package](docs/ui/README.md) preserve authored design history. Their dashboard,
-agentic UI and mobile roadmap do not describe shipped capabilities.
+## Version and platform coverage
 
-MIT: see [LICENSE](LICENSE). Dependency notices, approved source inventory and
-private publication remain release-owner work; this candidate is not a published
-release merely because its license file is present.
+Companion 0.2.0 consumes four crates from Full v1.17.0 at commit `acd029107533c07a661a7e3ad90eb28834688afa`. The local macOS ARM64 verification exercised the headless host, the CLI, linked MCP, the standalone fallback and two-process signed replication. Clean-machine installation remains deferred. [Local verification receipt](docs/intersession-0.2.0-verification.json) · [Support matrix](docs/maintenance.md#platform-and-harness-coverage)
+
+The Tauri shell hosts the node and shows service health in its tray. The main window contains the starter UI. The mobile replica and iroh storage adapter are libraries. Design materials describe potential desktop and mobile surfaces. [Architecture history](docs/00-architecture-and-implementation-plan.md) · [UI design materials](docs/ui/README.md)
+
+The project uses the MIT license. [License](LICENSE)

@@ -1,12 +1,8 @@
-> Current source selection (2026-10-05): pack consumers select exact full
-> revision `ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61` in workspace `Cargo.toml`.
-> The relocation hash below remains historical provenance. Compilation,
-> contract compatibility and installed acceptance remain final local gates.
-> See [current operational scope](../../README.md) and
-> [control contracts](../../docs/control-api.md); mobile library/storage source
-> does not establish a supported application/deployment.
-
 # sovereign-client
+
+The Rust client connects to the selected host. Its `sync_push_signed` and `sync_push_receipt` methods let callers persist an exact signed request, submit it, and reconcile uncertain replies. [Transport and receipt semantics](../../docs/control-api.md)
+
+The current workspace consumes Full v1.17.0 at `acd029107533c07a661a7e3ad90eb28834688afa`. The table below records the original relocation.
 
 Relocated from `prometheus-skill-pack` by `change-cpc-004-relocate-sovereign-sync`
 (phase `control-plane-to-companion`).
@@ -30,8 +26,7 @@ therefore Companion software, not pack software.
 
 What stayed in the pack: the `prometheus` CLI, `kbd-runtime` (the local signed
 KBD authority), `skill-index`, `learner-model`, the `StorageProvider` trait
-with its local adapters, and every functional service. The pack certifies fully
-with no Companion installed.
+with its local adapters, and every functional service. The pack retains its own local signed authority, and can read a registered project with Companion stopped.
 
 ## Dependency direction
 

@@ -1,12 +1,10 @@
 # Installation and ownership
 
-These procedures describe the source candidate. Supported release procedures
-require final local integration, approved artifact/pin freeze and publication.
-They have not been executed as acceptance here.
+Companion has two independent installers. The macOS installer loads an existing headless executable as a LaunchAgent. The Claude Code installer connects skills and an MCP registration to a selected host. Preview the changes before applying either. Full and Mini have their own release and container installers. Companion’s scripts expect locally supplied binaries.
 
 ## Prerequisites and paths
 
-Use separately built and approved `prometheus-companion-headless` and
+Use the [locked workspace build](../README.md#build-and-connect) or separately supplied `prometheus-companion-headless` and
 `sovereign-sync` binaries. Record source revisions, binary hashes, lockfile and
 selected pack revision. Neither installer builds them or installs pack services.
 The substrate and `skill-package.json` require pack contract `1.0.0`; version
@@ -36,6 +34,16 @@ windowed binary's credential-store prompt does not authorize the headless binary
 Restore an existing project's enrolled key or select it explicitly.
 `sovereign-sync --mode init` provisions local files for a new installation or
 approved recovery; creating a new key cannot recover another signer's history.
+
+## Run a foreground host
+
+Use an enrolled signing key and a registered project in the selected data root. Choose a socket with a private parent directory. Set `PROMETHEUS_DEVICE_KEY_FILE`, `PROMETHEUS_DATA_DIR` and `SOVEREIGN_SYNC_SOCKET` before starting the host. Run the headless binary from the checkout or use the absolute path to your approved copy.
+
+```bash
+target/debug/prometheus-companion-headless
+```
+
+In a second terminal using the same socket, check `GET /ready` and `GET /api/v1/sync/status`. The host logs authority failures and can keep its diagnostic listener available. Use the project's registered path and enrolled identity when deciding whether a ready host is the one you intended.
 
 ## macOS headless service
 
@@ -98,8 +106,7 @@ registration. Reload the harness afterward. Registration does not start a host.
 Private ownership and backups live under
 `<Claude-config-dir>/.prometheus-companion/skill-package-receipt.json`. Matching
 receipt-owned entries may be replaced; matching unowned entries remain unowned.
-Non-symlink skill content, unknown/edited registrations, malformed JSON and
-symlink ancestors are refused. Other MCP names are checked for preservation.
+Use real directories for the selected config and skills paths. On macOS, use the resolved physical path for a temporary config directory because `/tmp` is a symlink. Non-symlink skill content, unknown/edited registrations, malformed JSON and symlink ancestors are refused. Other MCP names are checked for preservation.
 Same-name local/project registrations can override user scope; reconcile them
 separately rather than removing another owner's configuration.
 
@@ -129,7 +136,18 @@ is off by default. `[discovery] dht = true` publishes a signed endpoint/relay/
 address record to the public DHT. iroh relay behavior is separate; disabling
 DHT does not promise no relay traffic.
 
-To enroll A and B: A exports with `sovereign-sync --config /absolute/config.toml
+For the same-machine procedure, enable mDNS and select local-only discovery in both configurations. This profile disables the external DHT and public relay. Give each host its own identity file, socket, data root, checkout and signing key. Each local-only identity can reuse its saved UDP ports after a restart.
+
+```toml
+[peers]
+local_only = true
+
+[discovery]
+mdns = true
+dht = false
+```
+
+To pair two endpoints, A exports with `sovereign-sync --config /absolute/config.toml
 --mode pair-export`; transfer its secret ticket privately to B. B imports using
 `--mode pair-import --ticket <private-ticket>`, then exports its updated ticket
 back to A for import. This order keeps the group secret shared. Import replaces
@@ -144,3 +162,6 @@ pairing URI payload, not a shipped QR screen, short-code protocol or group UI.
 Peers use Ed25519 endpoint authentication over iroh QUIC/TLS, without the
 architecture draft's additional Noise handshake. KBD project/replica signing
 authorization is separate; network pairing never grants arbitrary mutation.
+
+
+Before A and B exchange project history, A's authority must enroll B's public device identity for that project. The verified bootstrap copied A’s signed `project.loro` snapshot to B’s empty authority before starting the hosts, checked the copied file’s hash, then compared both signed audits. Preserve the complete journal and replica records in a recovery backup. Never overwrite a receiver that already has project history. Keep each device's own private key on that device. Confirm both report the same project ID, baseline revision and frontier. A project-history push can then deliver subsequent signed events. [Send and verify a push](control-api.md#send-project-history-to-one-paired-peer)
