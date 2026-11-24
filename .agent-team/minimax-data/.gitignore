@@ -1,0 +1,10 @@
+/*
+!/.gitignore
+!/agents/
+/agents/*
+!/agents/companion-lead/
+!/agents/companion-runtime/
+!/agents/companion-desktop/
+!/agents/artifact-critic/
+/agents/*/*
+!/agents/*/agent.md
