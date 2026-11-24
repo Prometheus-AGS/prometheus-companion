@@ -1,45 +1,22 @@
 # Maintenance, rollback and recovery
 
-Maintenance readiness is pending. Source convergence does not establish build,
-reproducible install, approved merge/tag, installed artifact or functional
-acceptance. The final local phase gate owns those receipts, including two-node
-signed-command convergence and pack-without-Companion operation. Missing
-historical receipts remain missing.
+## Platform and harness coverage
 
-## Finite support scope
+| Surface | Current operating evidence |
+|---|---|
+| macOS ARM64 headless | Companion 0.2.0 built and ran locally. Paired processes with separate keys and sockets transferred signed history, caught up after a restart and recovered from a stale checkout projection. The clean-machine LaunchAgent lifecycle remains deferred. |
+| Full pack without a host | The local process check stopped its isolated host and successfully read project status using the pack CLI. |
+| Connected Claude Code skills | The selected-host stdio MCP integration exercised status, signed push, receipt lookup and replay. Installation into a clean Claude user profile remains a separate check. |
+| macOS Tauri | The desktop source hosts the node and reports five tray health states. Desktop packaging and screens have separate acceptance. |
+| Linux, Windows and mobile | Source includes Unix headless components and an embedded replica library. The Companion package supplies its macOS LaunchAgent and Claude POSIX installers. Platform-specific service installation elsewhere requires separate provisioning and verification. |
 
-| Platform / harness | Source contract | Release status |
-|---|---|---|
-| macOS headless | Unix control/P2P and launchd installation/adoption | Pending build, clean install, SIGTERM/crash recovery and peer gates |
-| macOS Tauri | Same node, five service-health tray states | Pending packaging; starter main window, no dashboard acceptance |
-| Linux Unix headless | Socket/control and optional P2P source | No service installer; supported artifact requires its own local platform gate |
-| Claude Code POSIX | User-scope CLI MCP registration and skill links | Pending scratch-config ownership/dry-run and connected functional acceptance |
-| Native Windows, other harness installers, mobile app | No supported packaging contract here | Outside release matrix; retained library/design source is not a shipped app |
-
-Freeze exact OS/architecture, harness version, source commits, package/lockfile
-and binary hashes. A pending mandatory gate is not maintenance-only. Supervision
-uses the actual selected manifest, not a fixed historical service count.
+The verification record identifies the source base, dependency lock and SHA-256 hashes of the observed programs. Use these to compare a specific installation with the tested build. [Companion 0.2.0 receipt](intersession-0.2.0-verification.json)
 
 ## Compatibility and installation
 
-Companion is separately optional with one-way full-pack dependencies. Source
-selects exactly full revision `ba5c4516fd72e60c21ab3bb1d09a63105aeb3c61`; do not
-substitute a memory-server SHA or newer pack commit without owner disposition.
-Pack contract `1.0.0` appears in substrate/package metadata. Major incompatibility
-blocks installation; compatible labels still require real socket/path/manifest/
-signing/extension gates. Signed push schema `1.7` is a separate version domain.
+Companion 0.2.0 consumes Full v1.17.0 at `acd029107533c07a661a7e3ad90eb28834688afa`. The dependency selection in `Cargo.toml` and `Cargo.lock` is independent of the minimum pack extension contract (`1.0.0`) and signed HTTP push schema (`1.7`). Check each at its own boundary. Use the selected pack’s actual service manifest for supervision.
 
-Protected `versions.toml`, tags and real harness configuration require owner
-approval. Cargo source changes do not reconcile the protected file or lockfile.
-Reconcile resolved dependencies and build at the coherent final local boundary,
-record hashes, then publish the approved freeze. Do not use local pack path
-patches or mutable remote branches as reproducible dependencies.
-
-Initial origin is a private local mirror. Real publication, approved commits,
-artifact signing, tags and dependency notices remain release-owner work; no
-release download URL exists. [Installation](installation.md) covers separate
-service/Claude installers, receipts, private backups and read-only previews.
-A normal pack install must not implicitly install or require this extension.
+The Companion source lives in a private GitHub repository. Build using the locked workspace, record the resulting executable hashes, and review both installer previews. The pack release archives and container catalogs have their own product scope. [Installation](installation.md)
 
 ## Update and rollback
 
@@ -71,6 +48,22 @@ private, separate from public receipts. Record paths/hashes without exposing
 secret contents. Stop writers for a consistent copy. Status/screenshots cannot
 be converted into missing signed receipts.
 
+For a project-level recovery copy, first stop the selected writer and any process that can change this project. Set `PROJECT_ROOT` to its checkout, `PROJECT_ID` to the registered UUID and `DATA_ROOT` to that host’s resolved data root. Set `BACKUP_PARENT` to an existing private directory outside those roots. These archives contain signed project history and should receive the same access controls as the originals.
+
+```bash
+(
+  set -eu
+  umask 077
+  BACKUP_DIR=$(mktemp -d "${BACKUP_PARENT:?}/kbd-recovery.XXXXXXXX")
+  tar -C "${DATA_ROOT:?}/prometheus/kbd/projects" -cf "$BACKUP_DIR/authority.tar" "${PROJECT_ID:?}"
+  tar -C "${PROJECT_ROOT:?}" -cf "$BACKUP_DIR/checkout.tar" .prometheus/project.json .kbd-orchestrator/current-waypoint.json
+  (cd "$BACKUP_DIR" && shasum -a 256 authority.tar checkout.tar > SHA256SUMS && shasum -a 256 -c SHA256SUMS)
+  printf '%s\n' "$BACKUP_DIR"
+)
+```
+
+The two archives capture this project's authority and checkout identification. Preserve the registry, original receipts, outbox, sync configuration and enrolled key material through the host's private backup procedure as well. During a restore rehearsal, verify the archive checksums, extract into empty staging directories, compare project ID and replica membership, then read the signed audit and frontier through an isolated socket before switching any active writer. This project-copy example has no automatic full-machine restore step.
+
 Preserve the private `prometheus/companion/mcp-push-outbox` beneath the selected
 data root too. It contains exact signed request/endpoint intent created before
 MCP sends; recover the original ID from it after a process interruption. Intent
@@ -82,17 +75,14 @@ Headless preflight checks key-file access only. Authority, replica authorization
 and signed continuity still need real gates. Generating a new signer cannot
 repair another identity's history.
 
-Pack projection migration is a separate projection-only path in the selected
-phase source. Preview:
-`prometheus kbd --path /absolute/project migrate --projections --dry-run`.
-This must be genuinely read-only. Approved apply uses `--projections` without
-`--dry-run`, retains replica lock/authority semantics and does not change signed
-journal, `project.loro`, revision or frontier. Matching unmarked projections
-are adopted; changed/malformed originals retain exact bytes, hashes and durable
-archive provenance before replacement. Unknown phases are archived without
-inventing a canonical phase/replacement. Archives are not historical task
-closure. Confirm the approved installed pack actually exposes this command;
-source in a dirty candidate does not change the owner-selected dependency pin.
+If B already has the signed event but its checkout appears stale, compare the project's status with B’s `.kbd-orchestrator/current-waypoint.json`. The waypoint's `sourceRevision` and `frontier` should describe B's current authority. Resolve directory permissions or an obstructing file first. On that same receiver, request a projection refresh and read the waypoint again.
+
+```bash
+curl --fail --silent --show-error --unix-socket "$B_SOCKET" --request POST \
+  "http://localhost/api/v1/kbd/projects/$PROJECT_ID/projections/refresh"
+```
+
+A projection refresh reconstructs the checkout view from the signed authority. Recheck the audit and original request receipt. A missing event requires delivery or an authority recovery, while a stale waypoint can be rebuilt without sending the command again. For an older binary that cannot read newer signed history, preserve the originals and return to a compatible reader.
 
 Headless shutdown handles SIGTERM/interrupt, stops HTTP acceptance and P2P,
 drains the incoming authority consumer and joins the listener with bounded
