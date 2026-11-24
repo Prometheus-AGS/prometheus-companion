@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "activeTeam": "prometheus-companion",
+  "manifest": ".agent-team/prometheus-companion/team.json",
+  "target": "claude",
+  "nativeDefinitions": [
+    ".claude/agents/companion-lead.md",
+    ".claude/agents/companion-runtime.md",
+    ".claude/agents/companion-desktop.md",
+    ".claude/agents/artifact-critic.md"
+  ],
+  "instructionFiles": [
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "delegation": "native-definitions",
+  "limitations": [
+    "Native definition presence is not live invocation evidence. The active harness owns permissions, models, concurrency and delegation.",
+    "When delegation is unavailable, use selected role instructions sequentially and report it; builder-context review is not independent.",
+    "Zed external ACP agents use their native configuration; Zed parallel threads are not an automatic delegation API."
+  ]
+}

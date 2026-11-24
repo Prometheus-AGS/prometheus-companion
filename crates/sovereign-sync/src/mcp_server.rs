@@ -276,6 +276,9 @@ pub struct SyncPushParams {
 pub struct ConnectedSyncPushParams {
     /// Exact sync domain, including a project ID for multi-project KBD routes.
     pub domain: String,
+    /// Paired destination endpoint IDs for a new signed project push.
+    #[serde(default)]
+    pub target_endpoint_ids: Option<Vec<String>>,
     /// Replay the identical previously returned request after receipt lookup.
     /// Never change its ID or signed fields to resolve a lost response.
     #[serde(default)]
@@ -470,7 +473,7 @@ impl SovereignMcpServer {
         }
     }
 
-    fn signed_local_push_request(&self, domain: String) -> anyhow::Result<SignedSyncPushRequest> {
+    fn signed_local_push_request(&self, domain: String, targets: Option<Vec<String>>) -> anyhow::Result<SignedSyncPushRequest> {
         let project_id = if let Some(project_id) = domain.strip_prefix("kbd-control:") {
             project_id.to_string()
         } else {
@@ -482,7 +485,19 @@ impl SovereignMcpServer {
         };
         let control = self.kbd_projects.control(&project_id)?;
         let signer = control.runtime().device_signer()?;
-        Ok(SignedSyncPushRequest::new_local(domain, &signer))
+        let targets = match targets {
+            Some(explicit) => explicit,
+            None if domain.starts_with("kbd-control:") => {
+                let config = crate::config::SovereignConfig::load(&crate::config::SovereignConfig::default_path())?;
+                match (config.node.p2p_enabled, config.peers.bootstrap.as_slice()) {
+                    (false, _) => Vec::new(),
+                    (true, [only]) => vec![only.clone()],
+                    (true, _) => anyhow::bail!("select target_endpoint_ids for this project history push"),
+                }
+            }
+            None => Vec::new(),
+        };
+        Ok(SignedSyncPushRequest::new_targeted(domain, targets, &signer))
     }
 
     /// Start the MCP server on stdio (blocks until client disconnects).
@@ -594,11 +609,11 @@ impl SovereignMcpServer {
             Err(error) => return connected_error(&socket, error),
         };
         let request = match params.0.signed_request {
-            Some(request) if request.domain != params.0.domain => {
-                return serde_json::json!({"status": "rejected", "error": "signed request domain differs from requested domain"}).to_string();
+            Some(request) if request.domain != params.0.domain || params.0.target_endpoint_ids.as_ref().is_some_and(|ids| ids != &request.target_endpoint_ids) => {
+                return serde_json::json!({"status": "rejected", "error": "signed request domain or destinations differ from the requested push"}).to_string();
             }
             Some(request) => request,
-            None => match self.signed_local_push_request(params.0.domain) {
+            None => match self.signed_local_push_request(params.0.domain, params.0.target_endpoint_ids) {
                 Ok(request) => request,
                 Err(error) => return format!("sync-push signing error: {error}"),
             },

@@ -61,3 +61,7 @@ uuid = { version = "1", features = ["v4"] }
 name = "prometheus-companion-headless"
 path = "src/bin/prometheus-companion-headless.rs"
 required-features = ["sovereign"]
+
+[[example]]
+name = "kbd-receiver-file-check"
+required-features = ["sovereign"]

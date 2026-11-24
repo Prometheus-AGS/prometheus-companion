@@ -1,0 +1,97 @@
+{
+  "version": "0.2.0",
+  "host": "macOS ARM64",
+  "sourceBase": "b1528c9c8344c15cdaff8abd86b4d550668c1e99",
+  "cargoLockSha256": "879df32b2bfc5d7b0b4b2782b23f93b492c2ea7161ba1ed269d884d2f80bbc0c",
+  "peerRunnerSha256": "55b8be379b2065a8b69aa66a63087e7c38df9846a7ddf00d312ebee962a2a3e4",
+  "executables": {
+    "headless": "d32e68a98ce51c95053019f86a439cd0be38558ac7d80060a321540e51ea4ed9",
+    "sovereignSync": "9dd88940d163bdc8cdccbc5a0909361fb5d1ffaa86fc9b07c95b56f73977b0dc",
+    "packCandidate": "84889e00fa9217d6768baf75dce94ad9e348cb4b383f8add2709ac036f0f971f",
+    "installedWriter": "666c76b1e9da06048a0376a5c4facb5b0133928c00efe136c2cc31f90defc009",
+    "fixtureTool": "3a968672044bcf463f77cc21cb05f21c6cae43bd90c4724a56c479db887b53c9",
+    "receiverFileCheck": "d1dd02f1e104392b7845e27b752ff54744a834a7b8dbc27c9431ded5e77624e8"
+  },
+  "peerChecks": [
+    {
+      "case": "PEER-001",
+      "negativeOnly": true,
+      "result": "PASS",
+      "assertions": 21
+    },
+    {
+      "case": "PEER-002",
+      "negativeOnly": true,
+      "result": "PASS",
+      "assertions": 72
+    },
+    {
+      "case": "PEER-003",
+      "negativeOnly": true,
+      "result": "PASS",
+      "assertions": 104
+    },
+    {
+      "case": "PEER-004",
+      "negativeOnly": true,
+      "result": "PASS",
+      "assertions": 61
+    },
+    {
+      "case": "PEER-001",
+      "negativeOnly": false,
+      "result": "PASS",
+      "assertions": 61
+    },
+    {
+      "case": "PEER-002",
+      "negativeOnly": false,
+      "result": "PASS",
+      "assertions": 63
+    },
+    {
+      "case": "PEER-003",
+      "negativeOnly": false,
+      "result": "PASS",
+      "assertions": 93
+    },
+    {
+      "case": "PEER-004",
+      "negativeOnly": false,
+      "result": "PASS",
+      "assertions": 162
+    }
+  ],
+  "catchup": {
+    "signedEvents": 43,
+    "frames": 6,
+    "largestAcceptedWireBytes": 11771595,
+    "portsPreservedOnRestart": true
+  },
+  "fileBackedReceiver": {
+    "acceptedBytes": 16777216,
+    "rejectedBytes": 16777217,
+    "rejection": "too_large",
+    "authorityUnchanged": true
+  },
+  "connectedHeadlessProcesses": {
+    "status": "PASS",
+    "targetSha256": "3e29899430c71749f5d0c0c6e2d21dd36526404f465743d8c3e5dc7c368c9d34"
+  },
+  "openSpecStrict": {
+    "version": "2.1.1",
+    "passingItems": 1
+  },
+  "projectAudits": {
+    "passed": 7,
+    "failed": 0,
+    "skipped": [
+      "tokens",
+      "skill-desc",
+      "ui"
+    ]
+  },
+  "deferred": [
+    "Clean-machine installer and service lifecycle"
+  ]
+}

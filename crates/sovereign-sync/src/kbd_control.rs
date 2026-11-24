@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::Instant,
@@ -18,6 +19,8 @@ use kbd_runtime::{
     SignedCommandEnvelope,
 };
 use serde::Serialize;
+
+use crate::kbd_sync::KbdProjectionStatus;
 
 #[cfg(test)]
 static AUTHORITY_OPEN_COUNTS: std::sync::LazyLock<std::sync::Mutex<BTreeMap<String, usize>>> =
@@ -39,6 +42,7 @@ pub struct CommittedCommand {
 /// Loro document. The journal lock permits exactly one local writer.
 pub struct KbdControlPlane {
     runtime: Arc<Runtime>,
+    mutations: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -397,17 +401,11 @@ impl KbdControlPlane {
         project_root: &Path,
         expected_project_id: &str,
     ) -> io::Result<Self> {
-        let project_root = project_root.to_path_buf();
-        let expected_project_id = expected_project_id.to_owned();
-        let runtime = Arc::new(
-            tokio::task::spawn_blocking(move || {
-                Runtime::open_registered(&project_root, &expected_project_id)
-                    .map_err(|error| io::Error::other(error.to_string()))
-            })
-            .await
-            .map_err(|error| io::Error::other(format!("runtime open task failed: {error}")))??,
-        );
-        Self::from_runtime(runtime).await
+        let data_root = std::env::var_os("PROMETHEUS_DATA_DIR")
+            .map(PathBuf::from)
+            .or_else(dirs_next::data_local_dir)
+            .unwrap_or_else(|| std::env::temp_dir().join("prometheus-data"));
+        Self::open_registered_at(project_root, &data_root, expected_project_id).await
     }
 
     pub async fn open_registered_at(
@@ -420,6 +418,7 @@ impl KbdControlPlane {
         let expected_project_id = expected_project_id.to_owned();
         let runtime = Arc::new(
             tokio::task::spawn_blocking(move || {
+                reject_unsupported_journal_tail(&project_root, &data_root, &expected_project_id)?;
                 Runtime::open_registered_at(&project_root, &data_root, &expected_project_id)
                     .map_err(|error| io::Error::other(error.to_string()))
             })
@@ -430,6 +429,11 @@ impl KbdControlPlane {
     }
 
     async fn from_runtime(runtime: Arc<Runtime>) -> io::Result<Self> {
+        let reader = Arc::clone(&runtime);
+        tokio::task::spawn_blocking(move || reader.replay_authority().map(|_| ()))
+            .await
+            .map_err(io::Error::other)?
+            .map_err(io::Error::other)?;
         #[cfg(test)]
         {
             let key = runtime.runtime_root().display().to_string();
@@ -439,7 +443,10 @@ impl KbdControlPlane {
                 .entry(key)
                 .or_default() += 1;
         }
-        Ok(Self { runtime })
+        Ok(Self {
+            runtime,
+            mutations: Arc::new(tokio::sync::Mutex::new(())),
+        })
     }
 
     pub fn runtime(&self) -> &Runtime {
@@ -527,18 +534,15 @@ impl KbdControlPlane {
         let journal_bytes = fs::metadata(&journal_path)
             .map(|meta| meta.len())
             .unwrap_or(0);
-        let projection_path = self
-            .runtime
-            .project_root()
-            .join(".kbd-orchestrator/current-waypoint.json");
-        let projection_revision = fs::read(&projection_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .and_then(|value| {
-                value
-                    .get("sourceRevision")
-                    .and_then(|revision| revision.as_u64())
-            });
+        let projection_path = waypoint_path(&self.runtime);
+        let projection = read_waypoint(&projection_path).ok();
+        let projection_revision = projection
+            .as_ref()
+            .and_then(|waypoint| waypoint.get("sourceRevision"))
+            .and_then(serde_json::Value::as_u64);
+        let projection_matches = projection
+            .as_ref()
+            .is_some_and(|waypoint| waypoint_matches(waypoint, &state));
         let document = self
             .runtime
             .project_document()
@@ -577,7 +581,7 @@ impl KbdControlPlane {
             "projection": {
                 "revision": projection_revision,
                 "path": projection_path,
-                "matchesRuntime": projection_revision == Some(state.revision)
+                "matchesRuntime": projection_matches
             },
             "integrity": {
                 "signatureChainValid": signature_chain_valid,
@@ -599,6 +603,29 @@ impl KbdControlPlane {
             })?
     }
 
+    pub async fn enrolled_sync_signer(
+        &self,
+        state: &KbdStateV2,
+    ) -> io::Result<kbd_runtime::DeviceSigner> {
+        let runtime = Arc::clone(&self.runtime);
+        let signer = tokio::task::spawn_blocking(move || runtime.device_signer())
+            .await
+            .map_err(io::Error::other)?
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if state
+            .devices
+            .get(signer.key_id())
+            .is_some_and(|device| device.status == DeviceStatus::Active)
+        {
+            Ok(signer)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "local device is not enrolled for this KBD project",
+            ))
+        }
+    }
+
     pub async fn export_project_updates(&self) -> io::Result<Vec<u8>> {
         let runtime = Arc::clone(&self.runtime);
         tokio::task::spawn_blocking(move || {
@@ -614,19 +641,108 @@ impl KbdControlPlane {
         &self,
         updates: Vec<u8>,
     ) -> io::Result<(usize, KbdStateV2)> {
+        let (inserted, state, _, _, _) = self
+            .process_peer_update(Some(updates), |_, _| Ok(()))
+            .await?;
+        Ok((inserted, state))
+    }
+
+    pub(crate) async fn process_peer_update(
+        &self,
+        updates: Option<Vec<u8>>,
+        authorize: impl FnOnce(&Runtime, &KbdStateV2) -> io::Result<()> + Send + 'static,
+    ) -> io::Result<(usize, KbdStateV2, Vec<Event>, KbdProjectionStatus, String)> {
         let runtime = Arc::clone(&self.runtime);
+        let mutation = self.mutations.clone().lock_owned().await;
         tokio::task::spawn_blocking(move || {
-            runtime
-                .import_project_updates(&updates)
-                .map_err(|error| io::Error::other(error.to_string()))
+            let _mutation = mutation;
+            let (inserted, state, new_events, genesis_hash) = {
+                // Share the pack runtime's journal lock so an offline revoke
+                // cannot race project authorization and the durable import.
+                let path = runtime.journal_lock_path();
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let lock = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(path)?;
+                lock.lock()?;
+                let state = runtime.replay_authority().map_err(io::Error::other)?;
+                authorize(&runtime, &state)?;
+                let before = runtime.events().map_err(io::Error::other)?;
+                let genesis_hash = before
+                    .first()
+                    .map(|event| event.integrity_hash.clone())
+                    .unwrap_or_default();
+                if let Some(updates) = updates {
+                    let before = before
+                        .into_iter()
+                        .map(|event| event.event_id)
+                        .collect::<BTreeSet<_>>();
+                    let (inserted, merged) =
+                        runtime.import_project_updates(&updates).map_err(io::Error::other)?;
+                    let new_events = if inserted == 0 {
+                        Vec::new()
+                    } else {
+                        runtime
+                            .events()
+                            .map_err(io::Error::other)?
+                            .into_iter()
+                            .filter(|event| !before.contains(&event.event_id))
+                            .collect()
+                    };
+                    (inserted, merged, new_events, genesis_hash)
+                } else {
+                    (0, state, Vec::new(), genesis_hash)
+                }
+            };
+            let projection_error = if inserted > 0 {
+                runtime.write_compatibility_projections().err().map(|error| {
+                    tracing::warn!(%error, "KBD history imported; checkout projection refresh failed");
+                    error.to_string()
+                })
+            } else {
+                None
+            };
+            let projection = projection_status(&runtime, &state, projection_error);
+            Ok((inserted, state, new_events, projection, genesis_hash))
         })
         .await
-        .map_err(|join_error| io::Error::other(format!("import task failed: {join_error}")))?
+        .map_err(io::Error::other)?
+    }
+
+    pub(crate) async fn refresh_projections(&self) -> io::Result<KbdProjectionStatus> {
+        let runtime = Arc::clone(&self.runtime);
+        let mutation = self.mutations.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _mutation = mutation;
+            let error = runtime
+                .write_compatibility_projections()
+                .err()
+                .map(|error| error.to_string());
+            let state = runtime.replay_authority().map_err(io::Error::other)?;
+            Ok(projection_status(&runtime, &state, error))
+        })
+        .await
+        .map_err(io::Error::other)?
     }
 
     pub async fn submit(&self, envelope: CommandEnvelope) -> io::Result<CommittedCommand> {
+        let mutation = self.mutations.clone().lock_owned().await;
+        self.submit_locked(envelope, mutation).await
+    }
+
+    async fn submit_locked(
+        &self,
+        envelope: CommandEnvelope,
+        mutation: tokio::sync::OwnedMutexGuard<()>,
+    ) -> io::Result<CommittedCommand> {
         let runtime = Arc::clone(&self.runtime);
         tokio::task::spawn_blocking(move || {
+            let _mutation = mutation;
             let projection_command = envelope.command.clone();
             let result = runtime
                 .execute_command(envelope)
@@ -667,11 +783,116 @@ impl KbdControlPlane {
                 "remote commands require schemaVersion 2",
             ));
         }
+        let mutation = self.mutations.clone().lock_owned().await;
         let state = self.status_async().await?;
         signed
             .verify(&state)
             .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))?;
-        self.submit(signed.command).await
+        self.submit_locked(signed.command, mutation).await
+    }
+}
+
+fn reject_unsupported_journal_tail(
+    project_root: &Path,
+    data_root: &Path,
+    project_id: &str,
+) -> io::Result<()> {
+    // The pack repairs incomplete final lines at open. A syntactically
+    // complete future event without a final newline must be preserved instead
+    // of passing through the torn-write recovery path.
+    let registry = ProjectRegistry::open_at(data_root);
+    let Some(replica) = registry.lookup_path(project_root).map_err(io::Error::other)? else {
+        return Ok(());
+    };
+    if replica.project_id != project_id {
+        return Ok(());
+    }
+    let path = registry
+        .root()
+        .join("projects")
+        .join(project_id)
+        .join("replicas")
+        .join(replica.replica_id)
+        .join("events.jsonl");
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+    let mut last = [0];
+    file.seek(SeekFrom::End(-1))?;
+    file.read_exact(&mut last)?;
+    if last[0] == b'\n' {
+        return Ok(());
+    }
+    file.rewind()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let tail = bytes.rsplit(|&byte| byte == b'\n').next().unwrap_or_default();
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(tail) else {
+        return Ok(());
+    };
+    if value.get("schemaVersion").is_none() || value.get("kind").is_none() {
+        return Ok(());
+    }
+    let event = serde_json::from_value::<Event>(value).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unreadable signed journal event: {error}"),
+        )
+    })?;
+    if !matches!(event.schema_version.as_str(), "1" | "2") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported signed journal event schema {}", event.schema_version),
+        ));
+    }
+    Ok(())
+}
+
+fn waypoint_path(runtime: &Runtime) -> PathBuf {
+    runtime
+        .project_root()
+        .join(".kbd-orchestrator/current-waypoint.json")
+}
+
+fn read_waypoint(path: &Path) -> io::Result<serde_json::Value> {
+    serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)
+}
+
+fn waypoint_matches(value: &serde_json::Value, state: &KbdStateV2) -> bool {
+    value.get("sourceRevision").and_then(serde_json::Value::as_u64) == Some(state.revision)
+        && value
+            .get("frontier")
+            .and_then(|frontier| {
+                serde_json::from_value::<kbd_runtime::CausalFrontier>(frontier.clone()).ok()
+            })
+            .is_some_and(|frontier| frontier == state.frontier)
+}
+
+fn projection_status(
+    runtime: &Runtime,
+    state: &KbdStateV2,
+    write_error: Option<String>,
+) -> KbdProjectionStatus {
+    let waypoint = read_waypoint(&waypoint_path(runtime));
+    let current = waypoint
+        .as_ref()
+        .is_ok_and(|value| waypoint_matches(value, state));
+    let error = write_error.or_else(|| {
+        (!current).then(|| match waypoint {
+            Ok(_) => "checkout waypoint is behind the signed authority".into(),
+            Err(error) => format!("checkout waypoint is unavailable: {error}"),
+        })
+    });
+    KbdProjectionStatus {
+        source_revision: state.revision,
+        frontier: state.frontier.clone(),
+        current,
+        error,
     }
 }
 
